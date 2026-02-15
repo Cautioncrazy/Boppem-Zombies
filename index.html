@@ -117,6 +117,11 @@
                         <input type="range" id="deadzone-slider" min="0.0" max="0.5" step="0.05" value="0.1">
                         <span id="deadzone-val">0.1</span>
                     </div>
+                    <div class="setting-row">
+                        <label>Vibration (Haptics)</label>
+                        <input type="range" id="vibration-slider" min="0.0" max="1.0" step="0.1" value="1.0">
+                        <span id="vibration-val">100%</span>
+                    </div>
                 </div>
 
                 <div class="setting-row">
@@ -278,6 +283,7 @@
             sensY: 2.0,       // Controller/Advanced Vertical
             adsMult: 0.5,     // ADS Multiplier
             deadzone: 0.1,    // Stick Deadzone
+            vibrationIntensity: 1.0, // Haptic Strength (0.0 - 1.0)
             invertY: false,
             invertX: false,
             toggleADS: false,
@@ -435,6 +441,7 @@
                 document.getElementById('sens-x-slider').addEventListener('input', (e) => { SETTINGS.sensX = parseFloat(e.target.value); document.getElementById('sens-x-val').innerText = SETTINGS.sensX.toFixed(1); });
                 document.getElementById('ads-mult-slider').addEventListener('input', (e) => { SETTINGS.adsMult = parseFloat(e.target.value); document.getElementById('ads-mult-val').innerText = SETTINGS.adsMult.toFixed(1) + 'x'; });
                 document.getElementById('deadzone-slider').addEventListener('input', (e) => { SETTINGS.deadzone = parseFloat(e.target.value); document.getElementById('deadzone-val').innerText = SETTINGS.deadzone.toFixed(2); });
+                document.getElementById('vibration-slider').addEventListener('input', (e) => { SETTINGS.vibrationIntensity = parseFloat(e.target.value); document.getElementById('vibration-val').innerText = Math.round(SETTINGS.vibrationIntensity * 100) + '%'; });
 
                 document.getElementById('invert-y').addEventListener('change', e => SETTINGS.invertY = e.target.checked);
                 document.getElementById('invert-x').addEventListener('change', e => SETTINGS.invertX = e.target.checked);
@@ -657,6 +664,27 @@
                     playSound('reload');
                     this.player.lastFire = Date.now(); // Reset animation timer anchor
                     document.getElementById('ammo').innerText = "RELOADING...";
+
+                    // Haptic Sequence
+                    if (w.type === 'pistol') {
+                        // M1911: Mag Out (0.2), Mag In (0.8), Slide (1.2)
+                        this.input.hapticSequence([
+                            { delay: 0, duration: 50, strong: 0.2, weak: 0.5 },    // Start
+                            { delay: 300, duration: 100, strong: 0.5, weak: 0.2 }, // Mag Out
+                            { delay: 800, duration: 150, strong: 1.0, weak: 0.0 }, // Mag In (Slam)
+                            { delay: 1200, duration: 80, strong: 0.8, weak: 0.8 }  // Slide
+                        ]);
+                    } else if (w.type === 'rifle') {
+                        // Kar98k: Bolt Up (0.4), Back (0.8), Load (1.2), Down (1.6)
+                        this.input.hapticSequence([
+                            { delay: 0, duration: 50, strong: 0.3, weak: 0.3 },
+                            { delay: 400, duration: 100, strong: 0.6, weak: 0.0 }, // Bolt Up
+                            { delay: 800, duration: 100, strong: 0.7, weak: 0.2 }, // Bolt Back
+                            { delay: 1200, duration: 100, strong: 0.5, weak: 0.5 }, // Round In
+                            { delay: 1800, duration: 150, strong: 0.8, weak: 0.8 }  // Bolt Forward/Down
+                        ]);
+                    }
+
                     setTimeout(() => {
                         const needed = w.magSize - w.currentMag;
                         const taken = Math.min(needed, w.reserve);
@@ -1120,15 +1148,26 @@
                 }
             }
 
-            haptic(duration=100) {
+            haptic(duration=100, strong=1.0, weak=1.0) {
+                 if (SETTINGS.vibrationIntensity <= 0) return;
                  if (this.pad && this.pad.vibrationActuator) {
                      this.pad.vibrationActuator.playEffect("dual-rumble", {
                         startDelay: 0,
                         duration: duration,
-                        weakMagnitude: 1.0,
-                        strongMagnitude: 1.0
+                        weakMagnitude: weak * SETTINGS.vibrationIntensity,
+                        strongMagnitude: strong * SETTINGS.vibrationIntensity
                     });
                  }
+            }
+
+            hapticSequence(sequence) {
+                 // sequence: [{ delay: ms, duration: ms, strong: 0-1, weak: 0-1 }, ...]
+                 if (SETTINGS.vibrationIntensity <= 0) return;
+                 sequence.forEach(step => {
+                      setTimeout(() => {
+                           this.haptic(step.duration, step.strong, step.weak);
+                      }, step.delay);
+                 });
             }
 
             bindTouch(id, action) {
