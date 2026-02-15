@@ -3,9 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Web of the Dead: Nacht Der Untoten (FPS V4)</title>
+    <title>Web of the Dead: Nacht Der Untoten (FPS V6)</title>
     <script>
-        console.log("GAME VERSION: FPS V4 (Pause/Settings) LOADED");
+        console.log("GAME VERSION: FPS V7 (Crash Fix) LOADED");
+        // Error Handler
+        window.onerror = function(msg, url, line, col, error) {
+            const div = document.createElement('div');
+            div.style.position = 'absolute';
+            div.style.top = '0';
+            div.style.left = '0';
+            div.style.width = '100%';
+            div.style.background = 'rgba(255,0,0,0.8)';
+            div.style.color = '#fff';
+            div.style.padding = '10px';
+            div.innerText = `ERROR: ${msg}\nLine: ${line}`;
+            document.body.appendChild(div);
+        };
         // Force unregister any potential service workers
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(function(registrations) {
@@ -63,7 +76,7 @@
     <canvas id="canvas"></canvas>
     <div id="ui-layer">
         <div id="damage"></div>
-        <div id="fps-mode">FPS MODE V4</div>
+        <div id="fps-mode">FPS MODE V7</div>
         <div id="score" class="hud">Points: 500</div>
         <div id="round" class="hud">I</div>
         <div id="ammo" class="hud">M1911<br>8 / 32</div>
@@ -87,6 +100,10 @@
                 <div class="setting-row">
                     <label>Invert X</label>
                     <input type="checkbox" id="invert-x">
+                </div>
+                <div class="setting-row">
+                    <label>Toggle ADS</label>
+                    <input type="checkbox" id="toggle-ads">
                 </div>
             </div>
 
@@ -139,9 +156,11 @@
         // --- CONSTANTS ---
         const C = {
             FOV: Math.PI / 3,
+            FOV_ADS: Math.PI / 4.5,
             RES: 2, // 1=High, 2=Med, 4=Low
             MAX_DEPTH: 20,
             MOVE_SPEED: 3.0,
+            MOVE_SPEED_ADS: 1.5,
             ROT_SPEED_BASE: 2.0, // Base speed multiplier
             PLAYER_RADIUS: 0.3,
             MAP_SIZE: 20
@@ -177,16 +196,61 @@
         ];
 
         const WEAPONS = {
-            'M1911': { name: 'M1911', damage: 20, fireRate: 0.4, magSize: 8, reserveMax: 32, reloadTime: 1.5, spread: 0.05, color: '#555' },
-            'Kar98k': { name: 'Kar98k', damage: 100, fireRate: 1.0, magSize: 5, reserveMax: 50, reloadTime: 2.5, spread: 0.01, color: '#8B4513' },
-            'RayGun': { name: 'Ray Gun', damage: 1000, fireRate: 0.3, magSize: 20, reserveMax: 160, reloadTime: 3.0, spread: 0.0, color: '#0f0' }
+            'M1911': { name: 'M1911', damage: 20, fireRate: 0.4, magSize: 8, reserveMax: 32, reloadTime: 1.5, spread: 0.05, color: '#555', type: 'pistol' },
+            'Kar98k': { name: 'Kar98k', damage: 100, fireRate: 1.0, magSize: 5, reserveMax: 50, reloadTime: 2.5, spread: 0.01, color: '#8B4513', type: 'rifle' },
+            'RayGun': { name: 'Ray Gun', damage: 1000, fireRate: 0.3, magSize: 20, reserveMax: 160, reloadTime: 3.0, spread: 0.0, color: '#0f0', type: 'scifi' }
         };
+
+        // --- AUDIO ---
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        const AUDIO = new AudioContext();
+
+        function playSound(type) {
+            if (AUDIO.state === 'suspended') AUDIO.resume();
+            const osc = AUDIO.createOscillator();
+            const gain = AUDIO.createGain();
+            osc.connect(gain);
+            gain.connect(AUDIO.destination);
+
+            const now = AUDIO.currentTime;
+
+            if (type === 'shoot') {
+                osc.frequency.setValueAtTime(150, now);
+                osc.frequency.exponentialRampToValueAtTime(0.01, now + 0.1);
+                gain.gain.setValueAtTime(0.3, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+                osc.start(now);
+                osc.stop(now + 0.1);
+            } else if (type === 'hit') {
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(800, now);
+                gain.gain.setValueAtTime(0.1, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.05);
+                osc.start(now);
+                osc.stop(now + 0.05);
+            } else if (type === 'reload') {
+                osc.frequency.setValueAtTime(400, now);
+                osc.frequency.linearRampToValueAtTime(600, now + 0.2);
+                gain.gain.setValueAtTime(0.1, now);
+                gain.gain.linearRampToValueAtTime(0.01, now + 0.2);
+                osc.start(now);
+                osc.stop(now + 0.2);
+            } else if (type === 'empty') {
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(800, now);
+                gain.gain.setValueAtTime(0.05, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.05);
+                osc.start(now);
+                osc.stop(now + 0.05);
+            }
+        }
 
         // --- SETTINGS ---
         const SETTINGS = {
             sensitivity: 3.0,
             invertY: false,
             invertX: false,
+            toggleADS: false,
             keys: {
                 forward: 'KeyW',
                 backward: 'KeyS',
@@ -197,6 +261,103 @@
             }
         };
 
+        // --- TEXTURE GENERATOR ---
+        const TextureGen = {
+            createCanvas(w, h) {
+                const c = document.createElement('canvas');
+                c.width = w; c.height = h;
+                return { c, ctx: c.getContext('2d') };
+            },
+            noise(ctx, w, h, density=0.1) {
+                const id = ctx.getImageData(0,0,w,h);
+                const d = id.data;
+                for(let i=0; i<d.length; i+=4) {
+                    if(Math.random()<density) {
+                        const v = Math.random()*50;
+                        d[i]-=v; d[i+1]-=v; d[i+2]-=v;
+                    }
+                }
+                ctx.putImageData(id,0,0);
+            },
+            bricks(color, mortar) {
+                const s = 64; // Size
+                const {c, ctx} = this.createCanvas(s, s);
+                ctx.fillStyle = color;
+                ctx.fillRect(0,0,s,s);
+                this.noise(ctx, s, s, 0.2);
+
+                ctx.fillStyle = mortar;
+                // Horizontal lines
+                ctx.fillRect(0, 0, s, 2);
+                ctx.fillRect(0, 32, s, 2);
+                // Vertical (staggered)
+                ctx.fillRect(32, 2, 2, 30);
+                ctx.fillRect(0, 34, 2, 30);
+                return c;
+            },
+            metal() {
+                const s = 64;
+                const {c, ctx} = this.createCanvas(s, s);
+                const g = ctx.createLinearGradient(0,0,s,s);
+                g.addColorStop(0, '#888');
+                g.addColorStop(0.5, '#eee');
+                g.addColorStop(1, '#888');
+                ctx.fillStyle = g;
+                ctx.fillRect(0,0,s,s);
+                this.noise(ctx, s, s, 0.05);
+                ctx.strokeStyle = '#555';
+                ctx.strokeRect(0,0,s,s);
+                return c;
+            },
+            wood() {
+                const s = 64;
+                const {c, ctx} = this.createCanvas(s, s);
+                ctx.fillStyle = '#6F4E37';
+                ctx.fillRect(0,0,s,s);
+                // Grain
+                ctx.strokeStyle = '#5D4037';
+                for(let i=0; i<10; i++) {
+                    ctx.beginPath();
+                    ctx.moveTo(i*6 + Math.random()*5, 0);
+                    ctx.lineTo(i*6 + Math.random()*5, s);
+                    ctx.stroke();
+                }
+                return c;
+            },
+            zombie() {
+                const s = 64;
+                const {c, ctx} = this.createCanvas(s, s);
+                // Skin
+                ctx.fillStyle = '#2E8B57'; // SeaGreen
+                ctx.fillRect(16, 10, 32, 40); // Body
+                ctx.beginPath(); ctx.arc(32, 16, 14, 0, Math.PI*2); ctx.fill(); // Head
+
+                // Details
+                ctx.fillStyle = '#f00'; // Eyes
+                ctx.fillRect(24, 12, 4, 4);
+                ctx.fillRect(36, 12, 4, 4);
+
+                // Blood/Gore
+                ctx.fillStyle = '#800';
+                ctx.beginPath();
+                ctx.moveTo(32, 24); ctx.lineTo(28, 30); ctx.lineTo(36, 30);
+                ctx.fill(); // Mouth
+
+                // Clothes (Rags)
+                ctx.fillStyle = '#555';
+                ctx.fillRect(16, 30, 32, 20);
+
+                return c;
+            }
+        };
+
+        const TEXTURES = {
+            wall: TextureGen.bricks('#666', '#333'),
+            door: TextureGen.metal(),
+            window: TextureGen.wood(),
+            zombie: TextureGen.zombie()
+        };
+
         // --- GAME ---
         class Game {
             constructor() {
@@ -205,7 +366,7 @@
                 this.resize();
 
                 this.player = {
-                    x: 3.5, y: 2.5, dir: 0,
+                    x: 3.5, y: 2.5, dir: 0, pitch: 0,
                     health: 100, maxHealth: 100,
                     lastDamage: 0,
                     score: 500,
@@ -242,6 +403,7 @@
 
                 document.getElementById('invert-y').addEventListener('change', e => SETTINGS.invertY = e.target.checked);
                 document.getElementById('invert-x').addEventListener('change', e => SETTINGS.invertX = e.target.checked);
+                document.getElementById('toggle-ads').addEventListener('change', e => SETTINGS.toggleADS = e.target.checked);
                 document.getElementById('resume-btn').addEventListener('click', () => this.togglePause(false));
 
                 // Key Rebinding
@@ -304,6 +466,9 @@
             update(dt) {
                 if (this.player.health <= 0) return this.gameOver();
 
+                // Clear HitMarkers
+                if (this.hitMarkerTime && Date.now() - this.hitMarkerTime > 100) this.hitMarkerTime = 0;
+
                 // Health Regen
                 if (this.player.health < this.player.maxHealth && Date.now() - this.player.lastDamage > 5000) {
                     this.player.health += 20 * dt;
@@ -311,14 +476,25 @@
                     this.updateHUD();
                 }
 
+                // Input State
+                this.player.isAiming = this.input.isAiming();
+
                 // Player Movement
                 const move = this.input.getMove();
                 const rot = this.input.getLook();
 
                 // Apply Sensitivity
                 this.player.dir += rot.x * C.ROT_SPEED_BASE * SETTINGS.sensitivity * dt;
+                this.player.dir = (this.player.dir % (2 * Math.PI));
 
-                const speed = C.MOVE_SPEED * dt;
+                // Apply Pitch
+                this.player.pitch += rot.y * SETTINGS.sensitivity * 200 * dt; // Scale pitch speed
+                // Clamp Pitch
+                const maxPitch = 200; // Screen pixels offset approximately
+                if (this.player.pitch > maxPitch) this.player.pitch = maxPitch;
+                if (this.player.pitch < -maxPitch) this.player.pitch = -maxPitch;
+
+                const speed = (this.player.isAiming ? C.MOVE_SPEED_ADS : C.MOVE_SPEED) * dt;
                 const cos = Math.cos(this.player.dir);
                 const sin = Math.sin(this.player.dir);
 
@@ -331,7 +507,7 @@
 
                 // Input Actions
                 if (this.input.isAction('reload')) this.reload();
-                if (this.input.isFiring()) this.fire(timestamp = Date.now());
+                if (this.input.isFiring()) this.fire(Date.now());
                 if (this.input.isAction('interact') || this.input.buttons.action) this.interact();
 
                 // Pause Toggle (Debounced slightly handled in InputHandler)
@@ -382,9 +558,17 @@
 
             fire(time) {
                 const w = this.player.inventory[this.player.currentWeapon];
+
+                // Auto-Reload Trigger
+                if (w.currentMag === 0 && w.reserve > 0 && !this.player.reloading) {
+                    this.reload();
+                    return;
+                }
+
                 if (time - this.player.lastFire > w.fireRate * 1000 && w.currentMag > 0 && !this.player.reloading) {
                     w.currentMag--;
                     this.player.lastFire = time;
+                    playSound('shoot');
                     this.updateHUD();
 
                     // Hitscan Logic
@@ -395,13 +579,10 @@
                         const angleToZ = Math.atan2(z.y - this.player.y, z.x - this.player.x);
                         let angleDiff = angleToZ - this.player.dir;
 
-                        // Normalize angle
-                        if (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
-                        if (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
-                        while (angleDiff < -Math.PI) angleDiff += 2*Math.PI;
-                        while (angleDiff > Math.PI) angleDiff -= 2*Math.PI;
+                        // Robust normalization to [-PI, PI] using trig (avoids loops)
+                        angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
 
-                        if (Math.abs(angleDiff) < 0.1) { // Hit cone
+                        if (Math.abs(angleDiff) < 0.1) { // Hit cone (TODO: Narrow this for distance)
                             const d = Math.sqrt((this.player.x - z.x)**2 + (this.player.y - z.y)**2);
                             if (d < closestDist) {
                                 closestDist = d;
@@ -411,11 +592,23 @@
                     });
 
                     if (hitZombie) {
-                        hitZombie.health -= w.damage;
+                        // Pitch Based Damage
+                        let multiplier = 1.0;
+                        if (this.player.pitch > 20) multiplier = 1.5; // Head
+                        else if (this.player.pitch < -20) multiplier = 0.5; // Legs
+
+                        hitZombie.health -= w.damage * multiplier;
                         this.player.score += 10;
+
+                        this.hitMarkerTime = Date.now();
+                        playSound('hit');
+
                         if (hitZombie.health <= 0) this.player.score += 60;
                         this.updateHUD();
                     }
+                } else if (w.currentMag === 0 && w.reserve === 0 && time - this.player.lastFire > 500) {
+                     playSound('empty');
+                     this.player.lastFire = time;
                 }
             }
 
@@ -423,6 +616,8 @@
                 const w = this.player.inventory[this.player.currentWeapon];
                 if (!this.player.reloading && w.currentMag < w.magSize && w.reserve > 0) {
                     this.player.reloading = true;
+                    playSound('reload');
+                    this.player.lastFire = Date.now(); // Reset animation timer anchor
                     document.getElementById('ammo').innerText = "RELOADING...";
                     setTimeout(() => {
                         const needed = w.magSize - w.currentMag;
@@ -522,19 +717,30 @@
                 const h = this.canvas.height;
                 const mw = w / C.RES;
 
-                // Ceiling/Floor
+                const fov = this.player.isAiming ? C.FOV_ADS : C.FOV;
+                const pitchOffset = this.player.pitch;
+
+                // Ceiling (Solid)
                 this.ctx.fillStyle = '#111';
-                this.ctx.fillRect(0,0,w,h/2);
-                this.ctx.fillStyle = '#222';
-                this.ctx.fillRect(0,h/2,w,h/2);
+                this.ctx.fillRect(0,0,w,h/2 + pitchOffset);
+
+                // Floor (Gradient)
+                const floorGrad = this.ctx.createLinearGradient(0, h/2 + pitchOffset, 0, h);
+                floorGrad.addColorStop(0, '#000');
+                floorGrad.addColorStop(0.3, '#222');
+                floorGrad.addColorStop(1, '#333');
+                this.ctx.fillStyle = floorGrad;
+                this.ctx.fillRect(0,h/2 + pitchOffset,w,h/2 - pitchOffset);
 
                 const zBuffer = new Array(Math.ceil(mw)).fill(0);
 
                 // Raycast Walls
                 for(let x=0; x<mw; x++) {
                     const cameraX = 2 * x / mw - 1;
-                    const rayDirX = Math.cos(this.player.dir) + Math.cos(this.player.dir + Math.PI/2) * cameraX * 0.66;
-                    const rayDirY = Math.sin(this.player.dir) + Math.sin(this.player.dir + Math.PI/2) * cameraX * 0.66;
+                    // Adjusted for dynamic FOV
+                    const planeX = Math.tan(fov/2);
+                    const rayDirX = Math.cos(this.player.dir) + Math.cos(this.player.dir + Math.PI/2) * cameraX * planeX;
+                    const rayDirY = Math.sin(this.player.dir) + Math.sin(this.player.dir + Math.PI/2) * cameraX * planeX;
 
                     let mapX = Math.floor(this.player.x);
                     let mapY = Math.floor(this.player.y);
@@ -555,7 +761,7 @@
                         if (sideDistX < sideDistY) { sideDistX += deltaDistX; mapX += stepX; side = 0; }
                         else { sideDistY += deltaDistY; mapY += stepY; side = 1; }
 
-                        if (MAP[mapY] && MAP[mapY][mapX] > 0 && MAP[mapY][mapX] !== 4) hit = MAP[mapY][mapX]; // 4 is open door (empty)
+                        if (MAP[mapY] && MAP[mapY][mapX] > 0 && MAP[mapY][mapX] !== 4) hit = MAP[mapY][mapX];
                         dist++;
                     }
 
@@ -565,17 +771,43 @@
                     zBuffer[x] = perpWallDist;
 
                     const lineHeight = Math.floor(h / perpWallDist);
-                    const drawStart = -lineHeight / 2 + h / 2;
-                    let color = (hit === 1) ? '#666' : (hit === 2) ? '#8B4513' : (hit === 3) ? '#553311' : '#444';
+                    // Apply pitch offset to drawStart
+                    const drawStart = -lineHeight / 2 + h / 2 + pitchOffset;
 
-                    // Simple Shader
-                    if (side === 1) color = shadeColor(color, -20);
-                    // Distance fading
-                    const fade = Math.min(1, perpWallDist / C.MAX_DEPTH);
-                    color = shadeColor(color, -fade * 50);
+                    // Texture Mapping
+                    let texX;
+                    if (side === 0) texX = this.player.y + perpWallDist * rayDirY;
+                    else            texX = this.player.x + perpWallDist * rayDirX;
+                    texX -= Math.floor(texX);
 
-                    this.ctx.fillStyle = color;
+                    let tex = TEXTURES.wall;
+                    if (hit === 2) tex = TEXTURES.door;
+                    if (hit === 3) tex = TEXTURES.window;
+                    if (hit === 4) tex = TEXTURES.door; // Open Door
+
+                    const ts = 64; // Texture size
+                    let tx = Math.floor(texX * ts);
+                    if(side == 0 && rayDirX > 0) tx = ts - tx - 1;
+                    if(side == 1 && rayDirY < 0) tx = ts - tx - 1;
+
+                    // Draw Texture Strip
+                    this.ctx.drawImage(tex,
+                        tx, 0, 1, ts, // Source: 1 pixel wide strip
+                        x * C.RES, drawStart, C.RES, lineHeight // Dest: Scaled to screen height
+                    );
+
+                    // Distance/Side Shading (Black Overlay)
+                    this.ctx.fillStyle = '#000';
+                    let alpha = perpWallDist / C.MAX_DEPTH; // Distance fade
+                    if (side === 1) alpha += 0.2; // Side shading
+                    this.ctx.globalAlpha = Math.min(0.8, alpha);
                     this.ctx.fillRect(x * C.RES, drawStart, C.RES, lineHeight);
+                    this.ctx.globalAlpha = 1.0;
+
+                    // Edge Outline (Top/Bottom)
+                    this.ctx.fillStyle = '#000';
+                    this.ctx.fillRect(x * C.RES, drawStart - 1, C.RES, 2);
+                    this.ctx.fillRect(x * C.RES, drawStart + lineHeight - 1, C.RES, 2);
                 }
 
                 // Sprite Casting (Zombies)
@@ -584,41 +816,177 @@
                     const dy = z.y - this.player.y;
                     const dist = Math.sqrt(dx*dx + dy*dy);
 
-                    // Angle to sprite relative to player angle
                     const spriteAngle = Math.atan2(dy, dx) - this.player.dir;
-                    let diff = spriteAngle;
-                    while(diff < -Math.PI) diff += 2*Math.PI;
-                    while(diff > Math.PI) diff -= 2*Math.PI;
+                    let diff = Math.atan2(Math.sin(spriteAngle), Math.cos(spriteAngle));
 
-                    // Only draw if in front
-                    if (Math.abs(diff) < C.FOV / 1.5) {
-                        const screenX = (0.5 * (diff / (C.FOV / 2)) + 0.5) * w;
+                    if (Math.abs(diff) < fov / 1.5) {
+                        const screenX = (0.5 * (diff / (fov / 2)) + 0.5) * w;
                         const spriteH = h / dist;
-                        const spriteW = spriteH * 0.6; // Zombies are tall
-                        const spriteTop = (h - spriteH) / 2;
+                        const spriteW = spriteH * 0.6;
+                        // Apply pitch offset to spriteTop
+                        const spriteTop = (h - spriteH) / 2 + pitchOffset;
 
                         const zBufIdx = Math.floor(screenX / C.RES);
                         if (zBufIdx >= 0 && zBufIdx < mw && dist < zBuffer[zBufIdx]) {
-                            this.ctx.fillStyle = '#0f0'; // Zombie Green
-                            this.ctx.fillRect(screenX - spriteW/2, spriteTop, spriteW, spriteH);
-
-                            // Eyes
-                            this.ctx.fillStyle = '#f00';
-                            this.ctx.fillRect(screenX - spriteW*0.2, spriteTop + spriteH*0.2, spriteW*0.1, spriteW*0.1);
-                            this.ctx.fillRect(screenX + spriteW*0.1, spriteTop + spriteH*0.2, spriteW*0.1, spriteW*0.1);
+                            this.ctx.drawImage(TEXTURES.zombie, screenX - spriteW/2, spriteTop, spriteW, spriteH);
                         }
                     }
                 });
 
-                // Gun Model
-                const weapon = this.player.inventory[this.player.currentWeapon];
-                this.ctx.fillStyle = weapon.color || '#555';
-                const gunW = w * 0.15;
-                const gunH = h * 0.25;
-                const gunX = w/2 - gunW/2 + (this.player.reloading ? 0 : Math.sin(Date.now()/100)*5); // Idle sway
-                const gunY = h - gunH + (this.input.isFiring() ? 10 : 0) + (this.player.reloading ? 50 : 0); // Recoil/Reload anim
+                // Vignette (Flashlight)
+                const rad = this.ctx.createRadialGradient(w/2, h/2, h*0.2, w/2, h/2, h*0.8);
+                rad.addColorStop(0, 'rgba(0,0,0,0)');
+                rad.addColorStop(1, 'rgba(0,0,0,0.6)');
+                this.ctx.fillStyle = rad;
+                this.ctx.fillRect(0,0,w,h);
 
-                this.ctx.fillRect(gunX, gunY, gunW, gunH);
+                // Weapon & HUD
+                this.drawWeapon(w, h, pitchOffset);
+                this.drawHUD(w, h);
+            }
+
+            drawWeapon(w, h, pitchOffset) {
+                const weapon = this.player.inventory[this.player.currentWeapon];
+                const type = weapon.type || 'pistol';
+                const isAiming = this.player.isAiming;
+
+                // Bobbing / Sway
+                const time = Date.now() / 150;
+                const bobX = isAiming ? 0 : Math.sin(time) * 10 * (this.input.getMove().x || 0);
+                const bobY = isAiming ? 0 : Math.abs(Math.sin(time*2)) * 10 * (this.input.getMove().y || 0);
+
+                // Recoil
+                const recoil = (Date.now() - this.player.lastFire < 150) ? (isAiming ? 5 : 20) : 0;
+
+                // Reload Animation
+                let reloadOffset = 0;
+                if (this.player.reloading) {
+                   const progress = (Date.now() - this.player.lastFire) / (weapon.reloadTime * 1000); // Hacky tracking
+                   // We need better tracking for reload start, but for now we can infer or use a property
+                   reloadOffset = Math.sin(Date.now() / 200) * 100; // Placeholder anim
+                   if (isAiming) reloadOffset += 200; // Drop lower if aiming
+                }
+
+                // Position
+                // Center X for ADS, Offset Right for Hip
+                const centerX = w / 2;
+                const rightX = w * 0.7;
+                // Lerp between Hip and ADS
+                const targetX = isAiming ? centerX : rightX;
+                const gunX = targetX + bobX;
+                const gunY = h - (isAiming ? 0 : h * 0.05) + bobY + recoil + reloadOffset + (pitchOffset * 0.8);
+                // We drag the gun up/down with pitch slightly
+
+                const scale = h / 600;
+
+                this.ctx.save();
+                this.ctx.translate(gunX, gunY);
+                this.ctx.scale(scale, scale);
+
+                if (type === 'pistol') {
+                    // M1911 Style
+                    this.ctx.fillStyle = '#333';
+                    // Slide
+                    this.ctx.fillRect(-20, -100, 40, 200);
+                    // Grip (Visible if hip)
+                    if (!isAiming) {
+                        this.ctx.fillStyle = '#531';
+                        this.ctx.fillRect(-15, 50, 30, 80);
+                    }
+                    // Iron Sights (ADS)
+                    if (isAiming) {
+                        // Rear Notch
+                        this.ctx.fillStyle = '#111';
+                        this.ctx.fillRect(-20, -100, 15, 40);
+                        this.ctx.fillRect(5, -100, 15, 40);
+                        // Front Post (Green)
+                        this.ctx.fillStyle = '#0f0';
+                        this.ctx.fillRect(-2, -95, 4, 10);
+                    }
+                } else if (type === 'rifle') {
+                    // Kar98k Style
+                    this.ctx.fillStyle = '#5A3A22'; // Wood
+                    this.ctx.fillRect(-15, -150, 30, 400);
+
+                    // Barrel
+                    this.ctx.fillStyle = '#222';
+                    this.ctx.fillRect(-5, -300, 10, 150);
+
+                    // Iron Sights (ADS)
+                    if (isAiming) {
+                         // Rear Leaf
+                        this.ctx.fillStyle = '#333';
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(-30, 0);
+                        this.ctx.lineTo(30, 0);
+                        this.ctx.lineTo(0, 30);
+                        this.ctx.fill();
+
+                        // Front Post
+                        this.ctx.fillStyle = '#000';
+                        this.ctx.fillRect(-1, -145, 2, 20);
+                    }
+                } else if (type === 'scifi') {
+                     // Ray Gun
+                    this.ctx.fillStyle = '#a00';
+                    this.ctx.beginPath();
+                    this.ctx.arc(0, 0, 40, 0, Math.PI*2);
+                    this.ctx.fill();
+
+                    this.ctx.fillStyle = '#0f0';
+                    this.ctx.fillRect(-10, -150, 20, 150);
+                    // Rings
+                    this.ctx.strokeStyle = '#0f0';
+                    this.ctx.lineWidth = 4;
+                    this.ctx.beginPath();
+                    this.ctx.arc(0, -50, 25, 0, Math.PI*2);
+                    this.ctx.stroke();
+                    this.ctx.beginPath();
+                    this.ctx.arc(0, -100, 20, 0, Math.PI*2);
+                    this.ctx.stroke();
+
+                    if (isAiming) {
+                         // Crosshair inside sight
+                        this.ctx.fillStyle = '#f00';
+                        this.ctx.fillRect(-1, -150, 2, 20);
+                        this.ctx.fillRect(-10, -140, 20, 2);
+                    }
+                }
+
+                this.ctx.restore();
+            }
+
+            drawHUD(w, h) {
+                const cx = w/2;
+                const cy = h/2;
+
+                // Crosshair (Only if not aiming)
+                if (!this.player.isAiming) {
+                     const spread = 10 + (this.input.isFiring() ? 20 : 0) + (Math.abs(this.input.getMove().x) + Math.abs(this.input.getMove().y))*5;
+
+                     this.ctx.strokeStyle = '#0f0';
+                     this.ctx.lineWidth = 2;
+                     this.ctx.beginPath();
+                     this.ctx.moveTo(cx - spread - 10, cy); this.ctx.lineTo(cx - spread, cy);
+                     this.ctx.moveTo(cx + spread + 10, cy); this.ctx.lineTo(cx + spread, cy);
+                     this.ctx.moveTo(cx, cy - spread - 10); this.ctx.lineTo(cx, cy - spread);
+                     this.ctx.moveTo(cx, cy + spread + 10); this.ctx.lineTo(cx, cy + spread);
+                     this.ctx.stroke();
+                }
+
+                // Hit Marker
+                if (this.hitMarkerTime && Date.now() - this.hitMarkerTime < 100) {
+                     this.ctx.strokeStyle = '#fff';
+                     this.ctx.lineWidth = 3;
+                     this.ctx.beginPath();
+                     const s = 15; // Size
+                     const o = 5;  // Offset
+                     this.ctx.moveTo(cx - s, cy - s); this.ctx.lineTo(cx - o, cy - o);
+                     this.ctx.moveTo(cx + s, cy - s); this.ctx.lineTo(cx + o, cy - o);
+                     this.ctx.moveTo(cx - s, cy + s); this.ctx.lineTo(cx - o, cy + o);
+                     this.ctx.moveTo(cx + s, cy + s); this.ctx.lineTo(cx + o, cy + o);
+                     this.ctx.stroke();
+                }
             }
         }
 
@@ -627,9 +995,9 @@
             constructor(game) {
                 this.game = game;
                 this.keys = {};
-                this.buttons = { fire: false, action: false, reload: false };
+                this.buttons = { fire: false, action: false, reload: false, ads: false };
                 this.touch = { lx: 0, ly: 0, rx: 0 };
-                this.mouse = { x: 0 };
+                this.mouse = { x: 0, y: 0 };
 
                 window.addEventListener('keydown', e => {
                     // Prevent default scrolling for game keys
@@ -647,7 +1015,15 @@
 
                 window.addEventListener('mousedown', e => {
                     if (document.pointerLockElement === document.getElementById('canvas')) {
-                        if (e.button === 0) this.buttons.fire = true;
+                        if (e.button === 0) {
+                             this.buttons.fire = true;
+                        } else if (e.button === 2) { // Right Click
+                            if (SETTINGS.toggleADS) {
+                                this.buttons.ads = !this.buttons.ads;
+                            } else {
+                                this.buttons.ads = true;
+                            }
+                        }
                     } else if (!this.game.paused) {
                          // Click to capture if not paused
                         document.getElementById('canvas').requestPointerLock();
@@ -655,7 +1031,10 @@
                 });
                 window.addEventListener('mouseup', e => {
                     if (e.button === 0) this.buttons.fire = false;
+                    if (e.button === 2 && !SETTINGS.toggleADS) this.buttons.ads = false;
                 });
+                // Disable context menu
+                window.addEventListener('contextmenu', e => e.preventDefault());
 
                 this.bindTouch('btn-action', 'action');
                 this.bindTouch('btn-reload', 'reload');
@@ -667,6 +1046,7 @@
                 document.addEventListener('mousemove', (e) => {
                     if (document.pointerLockElement === document.getElementById('canvas')) {
                         this.mouse.x += e.movementX * 0.002;
+                        this.mouse.y += e.movementY * 0.002;
                     }
                 });
             }
@@ -722,9 +1102,11 @@
             }
 
             getLook() {
-                let x = 0;
+                let x = 0, y = 0;
                 if (this.keys['ArrowLeft']) x -= 1;
                 if (this.keys['ArrowRight']) x += 1;
+                if (this.keys['ArrowUp']) y -= 1;
+                if (this.keys['ArrowDown']) y += 1;
 
                 // Mouse Look
                 if (Math.abs(this.mouse.x) > 0.001) {
@@ -733,13 +1115,21 @@
                     x += mx * 2.0;
                 }
 
+                if (Math.abs(this.mouse.y) > 0.001) {
+                    let my = this.mouse.y;
+                    if (SETTINGS.invertY) my = -my;
+                    y += my * 2.0;
+                }
+
                 if (Math.abs(this.touch.rx) > 0.1) x += this.touch.rx * 2.0;
 
                 this.mouse.x = 0; // Reset frame delta
+                this.mouse.y = 0;
 
-                return { x };
+                return { x, y };
             }
 
+            isAiming() { return this.buttons.ads; }
             isFiring() { return this.keys['Space'] || this.buttons.fire; }
         }
 
