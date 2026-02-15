@@ -261,6 +261,103 @@
             }
         };
 
+        // --- TEXTURE GENERATOR ---
+        const TextureGen = {
+            createCanvas(w, h) {
+                const c = document.createElement('canvas');
+                c.width = w; c.height = h;
+                return { c, ctx: c.getContext('2d') };
+            },
+            noise(ctx, w, h, density=0.1) {
+                const id = ctx.getImageData(0,0,w,h);
+                const d = id.data;
+                for(let i=0; i<d.length; i+=4) {
+                    if(Math.random()<density) {
+                        const v = Math.random()*50;
+                        d[i]-=v; d[i+1]-=v; d[i+2]-=v;
+                    }
+                }
+                ctx.putImageData(id,0,0);
+            },
+            bricks(color, mortar) {
+                const s = 64; // Size
+                const {c, ctx} = this.createCanvas(s, s);
+                ctx.fillStyle = color;
+                ctx.fillRect(0,0,s,s);
+                this.noise(ctx, s, s, 0.2);
+
+                ctx.fillStyle = mortar;
+                // Horizontal lines
+                ctx.fillRect(0, 0, s, 2);
+                ctx.fillRect(0, 32, s, 2);
+                // Vertical (staggered)
+                ctx.fillRect(32, 2, 2, 30);
+                ctx.fillRect(0, 34, 2, 30);
+                return c;
+            },
+            metal() {
+                const s = 64;
+                const {c, ctx} = this.createCanvas(s, s);
+                const g = ctx.createLinearGradient(0,0,s,s);
+                g.addColorStop(0, '#888');
+                g.addColorStop(0.5, '#eee');
+                g.addColorStop(1, '#888');
+                ctx.fillStyle = g;
+                ctx.fillRect(0,0,s,s);
+                this.noise(ctx, s, s, 0.05);
+                ctx.strokeStyle = '#555';
+                ctx.strokeRect(0,0,s,s);
+                return c;
+            },
+            wood() {
+                const s = 64;
+                const {c, ctx} = this.createCanvas(s, s);
+                ctx.fillStyle = '#6F4E37';
+                ctx.fillRect(0,0,s,s);
+                // Grain
+                ctx.strokeStyle = '#5D4037';
+                for(let i=0; i<10; i++) {
+                    ctx.beginPath();
+                    ctx.moveTo(i*6 + Math.random()*5, 0);
+                    ctx.lineTo(i*6 + Math.random()*5, s);
+                    ctx.stroke();
+                }
+                return c;
+            },
+            zombie() {
+                const s = 64;
+                const {c, ctx} = this.createCanvas(s, s);
+                // Skin
+                ctx.fillStyle = '#2E8B57'; // SeaGreen
+                ctx.fillRect(16, 10, 32, 40); // Body
+                ctx.beginPath(); ctx.arc(32, 16, 14, 0, Math.PI*2); ctx.fill(); // Head
+
+                // Details
+                ctx.fillStyle = '#f00'; // Eyes
+                ctx.fillRect(24, 12, 4, 4);
+                ctx.fillRect(36, 12, 4, 4);
+
+                // Blood/Gore
+                ctx.fillStyle = '#800';
+                ctx.beginPath();
+                ctx.moveTo(32, 24); ctx.lineTo(28, 30); ctx.lineTo(36, 30);
+                ctx.fill(); // Mouth
+
+                // Clothes (Rags)
+                ctx.fillStyle = '#555';
+                ctx.fillRect(16, 30, 32, 20);
+
+                return c;
+            }
+        };
+
+        const TEXTURES = {
+            wall: TextureGen.bricks('#666', '#333'),
+            door: TextureGen.metal(),
+            window: TextureGen.wood(),
+            zombie: TextureGen.zombie()
+        };
+
         // --- GAME ---
         class Game {
             constructor() {
@@ -623,10 +720,16 @@
                 const fov = this.player.isAiming ? C.FOV_ADS : C.FOV;
                 const pitchOffset = this.player.pitch;
 
-                // Ceiling/Floor
+                // Ceiling (Solid)
                 this.ctx.fillStyle = '#111';
                 this.ctx.fillRect(0,0,w,h/2 + pitchOffset);
-                this.ctx.fillStyle = '#222';
+
+                // Floor (Gradient)
+                const floorGrad = this.ctx.createLinearGradient(0, h/2 + pitchOffset, 0, h);
+                floorGrad.addColorStop(0, '#000');
+                floorGrad.addColorStop(0.3, '#222');
+                floorGrad.addColorStop(1, '#333');
+                this.ctx.fillStyle = floorGrad;
                 this.ctx.fillRect(0,h/2 + pitchOffset,w,h/2 - pitchOffset);
 
                 const zBuffer = new Array(Math.ceil(mw)).fill(0);
@@ -670,16 +773,41 @@
                     const lineHeight = Math.floor(h / perpWallDist);
                     // Apply pitch offset to drawStart
                     const drawStart = -lineHeight / 2 + h / 2 + pitchOffset;
-                    let color = (hit === 1) ? '#666666' : (hit === 2) ? '#8B4513' : (hit === 3) ? '#553311' : '#444444';
 
-                    // Simple Shader
-                    if (side === 1) color = shadeColor(color, -20);
-                    // Distance fading
-                    const fade = Math.min(1, perpWallDist / C.MAX_DEPTH);
-                    color = shadeColor(color, -fade * 50);
+                    // Texture Mapping
+                    let texX;
+                    if (side === 0) texX = this.player.y + perpWallDist * rayDirY;
+                    else            texX = this.player.x + perpWallDist * rayDirX;
+                    texX -= Math.floor(texX);
 
-                    this.ctx.fillStyle = color;
+                    let tex = TEXTURES.wall;
+                    if (hit === 2) tex = TEXTURES.door;
+                    if (hit === 3) tex = TEXTURES.window;
+                    if (hit === 4) tex = TEXTURES.door; // Open Door
+
+                    const ts = 64; // Texture size
+                    let tx = Math.floor(texX * ts);
+                    if(side == 0 && rayDirX > 0) tx = ts - tx - 1;
+                    if(side == 1 && rayDirY < 0) tx = ts - tx - 1;
+
+                    // Draw Texture Strip
+                    this.ctx.drawImage(tex,
+                        tx, 0, 1, ts, // Source: 1 pixel wide strip
+                        x * C.RES, drawStart, C.RES, lineHeight // Dest: Scaled to screen height
+                    );
+
+                    // Distance/Side Shading (Black Overlay)
+                    this.ctx.fillStyle = '#000';
+                    let alpha = perpWallDist / C.MAX_DEPTH; // Distance fade
+                    if (side === 1) alpha += 0.2; // Side shading
+                    this.ctx.globalAlpha = Math.min(0.8, alpha);
                     this.ctx.fillRect(x * C.RES, drawStart, C.RES, lineHeight);
+                    this.ctx.globalAlpha = 1.0;
+
+                    // Edge Outline (Top/Bottom)
+                    this.ctx.fillStyle = '#000';
+                    this.ctx.fillRect(x * C.RES, drawStart - 1, C.RES, 2);
+                    this.ctx.fillRect(x * C.RES, drawStart + lineHeight - 1, C.RES, 2);
                 }
 
                 // Sprite Casting (Zombies)
@@ -700,15 +828,17 @@
 
                         const zBufIdx = Math.floor(screenX / C.RES);
                         if (zBufIdx >= 0 && zBufIdx < mw && dist < zBuffer[zBufIdx]) {
-                            this.ctx.fillStyle = '#0f0';
-                            this.ctx.fillRect(screenX - spriteW/2, spriteTop, spriteW, spriteH);
-
-                            this.ctx.fillStyle = '#f00';
-                            this.ctx.fillRect(screenX - spriteW*0.2, spriteTop + spriteH*0.2, spriteW*0.1, spriteW*0.1);
-                            this.ctx.fillRect(screenX + spriteW*0.1, spriteTop + spriteH*0.2, spriteW*0.1, spriteW*0.1);
+                            this.ctx.drawImage(TEXTURES.zombie, screenX - spriteW/2, spriteTop, spriteW, spriteH);
                         }
                     }
                 });
+
+                // Vignette (Flashlight)
+                const rad = this.ctx.createRadialGradient(w/2, h/2, h*0.2, w/2, h/2, h*0.8);
+                rad.addColorStop(0, 'rgba(0,0,0,0)');
+                rad.addColorStop(1, 'rgba(0,0,0,0.6)');
+                this.ctx.fillStyle = rad;
+                this.ctx.fillRect(0,0,w,h);
 
                 // Weapon & HUD
                 this.drawWeapon(w, h, pitchOffset);
