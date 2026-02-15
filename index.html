@@ -3,9 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Web of the Dead: Nacht Der Untoten (FPS V5)</title>
+    <title>Web of the Dead: Nacht Der Untoten (FPS V6)</title>
     <script>
-        console.log("GAME VERSION: FPS V5 (Anti-Freeze) LOADED");
+        console.log("GAME VERSION: FPS V6 (Render-Freeze Fix) LOADED");
+        // Error Handler
+        window.onerror = function(msg, url, line, col, error) {
+            const div = document.createElement('div');
+            div.style.position = 'absolute';
+            div.style.top = '0';
+            div.style.left = '0';
+            div.style.width = '100%';
+            div.style.background = 'rgba(255,0,0,0.8)';
+            div.style.color = '#fff';
+            div.style.padding = '10px';
+            div.innerText = `ERROR: ${msg}\nLine: ${line}`;
+            document.body.appendChild(div);
+        };
         // Force unregister any potential service workers
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(function(registrations) {
@@ -63,7 +76,7 @@
     <canvas id="canvas"></canvas>
     <div id="ui-layer">
         <div id="damage"></div>
-        <div id="fps-mode">FPS MODE V5</div>
+        <div id="fps-mode">FPS MODE V6</div>
         <div id="score" class="hud">Points: 500</div>
         <div id="round" class="hud">I</div>
         <div id="ammo" class="hud">M1911<br>8 / 32</div>
@@ -585,9 +598,7 @@
 
                     // Angle to sprite relative to player angle
                     const spriteAngle = Math.atan2(dy, dx) - this.player.dir;
-                    let diff = spriteAngle;
-                    while(diff < -Math.PI) diff += 2*Math.PI;
-                    while(diff > Math.PI) diff -= 2*Math.PI;
+                    let diff = Math.atan2(Math.sin(spriteAngle), Math.cos(spriteAngle)); // Safe normalization
 
                     // Only draw if in front
                     if (Math.abs(diff) < C.FOV / 1.5) {
