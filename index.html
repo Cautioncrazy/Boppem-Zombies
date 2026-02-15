@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Web of the Dead: Nacht Der Untoten (FPS V6)</title>
     <script>
-        console.log("GAME VERSION: FPS V6 (Render-Freeze Fix) LOADED");
+        console.log("GAME VERSION: FPS V7 (Crash Fix) LOADED");
         // Error Handler
         window.onerror = function(msg, url, line, col, error) {
             const div = document.createElement('div');
@@ -76,7 +76,7 @@
     <canvas id="canvas"></canvas>
     <div id="ui-layer">
         <div id="damage"></div>
-        <div id="fps-mode">FPS MODE V6</div>
+        <div id="fps-mode">FPS MODE V7</div>
         <div id="score" class="hud">Points: 500</div>
         <div id="round" class="hud">I</div>
         <div id="ammo" class="hud">M1911<br>8 / 32</div>
@@ -346,7 +346,7 @@
 
                 // Input Actions
                 if (this.input.isAction('reload')) this.reload();
-                if (this.input.isFiring()) this.fire(timestamp = Date.now());
+                if (this.input.isFiring()) this.fire(Date.now());
                 if (this.input.isAction('interact') || this.input.buttons.action) this.interact();
 
                 // Pause Toggle (Debounced slightly handled in InputHandler)
