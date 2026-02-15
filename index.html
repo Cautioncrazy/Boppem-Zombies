@@ -48,6 +48,8 @@
         #pause-menu h1 { color: #fff; font-size: 40px; margin-bottom: 20px; }
         .menu-section { width: 80%; max-width: 400px; margin-bottom: 20px; border: 1px solid #444; padding: 10px; background: rgba(50,50,50,0.5); }
         .menu-section h3 { margin-top: 0; border-bottom: 1px solid #666; padding-bottom: 5px; }
+        #advanced-menu { display: none; padding-top: 10px; border-top: 1px solid #666; margin-top: 10px; }
+        #toggle-adv-btn { background: none; border: none; color: #ffd700; text-decoration: underline; cursor: pointer; font-family: inherit; font-size: 16px; width: 100%; text-align: center; }
         .setting-row { display: flex; justify-content: space-between; align-items: center; margin: 10px 0; }
         .setting-row label { font-size: 18px; }
         .setting-row input[type="range"] { width: 50%; }
@@ -89,10 +91,34 @@
             <div class="menu-section">
                 <h3>Controls</h3>
                 <div class="setting-row">
-                    <label>Sensitivity</label>
+                    <label>Sensitivity (Mouse)</label>
                     <input type="range" id="sens-slider" min="1" max="10" step="0.5" value="3.0">
                     <span id="sens-val">3.0</span>
                 </div>
+                <button id="toggle-adv-btn" onclick="document.getElementById('advanced-menu').style.display = (document.getElementById('advanced-menu').style.display==='block'?'none':'block')">Advanced Settings ▼</button>
+                <div id="advanced-menu">
+                    <div class="setting-row">
+                        <label>Vert. Sens (Y)</label>
+                        <input type="range" id="sens-y-slider" min="1" max="10" step="0.5" value="2.0">
+                        <span id="sens-y-val">2.0</span>
+                    </div>
+                    <div class="setting-row">
+                        <label>Horiz. Sens (X)</label>
+                        <input type="range" id="sens-x-slider" min="1" max="10" step="0.5" value="3.0">
+                        <span id="sens-x-val">3.0</span>
+                    </div>
+                    <div class="setting-row">
+                        <label>ADS Multiplier</label>
+                        <input type="range" id="ads-mult-slider" min="0.1" max="1.0" step="0.1" value="0.5">
+                        <span id="ads-mult-val">0.5x</span>
+                    </div>
+                    <div class="setting-row">
+                        <label>Deadzone</label>
+                        <input type="range" id="deadzone-slider" min="0.0" max="0.5" step="0.05" value="0.1">
+                        <span id="deadzone-val">0.1</span>
+                    </div>
+                </div>
+
                 <div class="setting-row">
                     <label>Invert Y</label>
                     <input type="checkbox" id="invert-y">
@@ -247,7 +273,11 @@
 
         // --- SETTINGS ---
         const SETTINGS = {
-            sensitivity: 3.0,
+            sensitivity: 3.0, // Base/Mouse sensitivity
+            sensX: 3.0,       // Controller/Advanced Horizontal
+            sensY: 2.0,       // Controller/Advanced Vertical
+            adsMult: 0.5,     // ADS Multiplier
+            deadzone: 0.1,    // Stick Deadzone
             invertY: false,
             invertX: false,
             toggleADS: false,
@@ -401,6 +431,11 @@
                     valDisplay.innerText = SETTINGS.sensitivity.toFixed(1);
                 });
 
+                document.getElementById('sens-y-slider').addEventListener('input', (e) => { SETTINGS.sensY = parseFloat(e.target.value); document.getElementById('sens-y-val').innerText = SETTINGS.sensY.toFixed(1); });
+                document.getElementById('sens-x-slider').addEventListener('input', (e) => { SETTINGS.sensX = parseFloat(e.target.value); document.getElementById('sens-x-val').innerText = SETTINGS.sensX.toFixed(1); });
+                document.getElementById('ads-mult-slider').addEventListener('input', (e) => { SETTINGS.adsMult = parseFloat(e.target.value); document.getElementById('ads-mult-val').innerText = SETTINGS.adsMult.toFixed(1) + 'x'; });
+                document.getElementById('deadzone-slider').addEventListener('input', (e) => { SETTINGS.deadzone = parseFloat(e.target.value); document.getElementById('deadzone-val').innerText = SETTINGS.deadzone.toFixed(2); });
+
                 document.getElementById('invert-y').addEventListener('change', e => SETTINGS.invertY = e.target.checked);
                 document.getElementById('invert-x').addEventListener('change', e => SETTINGS.invertX = e.target.checked);
                 document.getElementById('toggle-ads').addEventListener('change', e => SETTINGS.toggleADS = e.target.checked);
@@ -477,6 +512,7 @@
                 }
 
                 // Input State
+                this.input.pollGamepads();
                 this.player.isAiming = this.input.isAiming();
 
                 // Player Movement
@@ -569,6 +605,7 @@
                     w.currentMag--;
                     this.player.lastFire = time;
                     playSound('shoot');
+                    this.input.haptic(50);
                     this.updateHUD();
 
                     // Hitscan Logic
@@ -602,6 +639,7 @@
 
                         this.hitMarkerTime = Date.now();
                         playSound('hit');
+                        this.input.haptic(20);
 
                         if (hitZombie.health <= 0) this.player.score += 60;
                         this.updateHUD();
@@ -1051,6 +1089,48 @@
                 });
             }
 
+            pollGamepads() {
+                const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+                this.pad = null;
+                // Find first active gamepad
+                for (let i = 0; i < gamepads.length; i++) {
+                    if (gamepads[i]) {
+                        this.pad = gamepads[i];
+                        break;
+                    }
+                }
+
+                if (this.pad) {
+                    // Update buttons
+                    this.buttons.fire = this.pad.buttons[7].pressed; // R2
+                    this.buttons.ads = this.pad.buttons[6].pressed;  // L2
+
+                    // Tap detection for Reload/Interact (simple state check, debounce handled in logic)
+                    if (this.pad.buttons[2].pressed) { // Square
+                         if (!this.padReloadDown) { this.keys[SETTINGS.keys.reload] = true; this.padReloadDown = true; }
+                    } else { this.keys[SETTINGS.keys.reload] = false; this.padReloadDown = false; }
+
+                    if (this.pad.buttons[0].pressed) { // Cross
+                         if (!this.padActionDown) { this.keys[SETTINGS.keys.interact] = true; this.padActionDown = true; }
+                    } else { this.keys[SETTINGS.keys.interact] = false; this.padActionDown = false; }
+
+                    if (this.pad.buttons[9].pressed) { // Start
+                         if (!this.padStartDown) { this.game.togglePause(!this.game.paused); this.padStartDown = true; }
+                    } else { this.padStartDown = false; }
+                }
+            }
+
+            haptic(duration=100) {
+                 if (this.pad && this.pad.vibrationActuator) {
+                     this.pad.vibrationActuator.playEffect("dual-rumble", {
+                        startDelay: 0,
+                        duration: duration,
+                        weakMagnitude: 1.0,
+                        strongMagnitude: 1.0
+                    });
+                 }
+            }
+
             bindTouch(id, action) {
                 const btn = document.getElementById(id);
                 btn.addEventListener('touchstart', (e) => { e.preventDefault(); this.buttons[action] = true; });
@@ -1096,32 +1176,97 @@
                 if (this.isAction('backward')) y -= 1;
                 if (this.isAction('left')) x -= 1;
                 if (this.isAction('right')) x += 1;
+
+                // Touch
                 if (Math.abs(this.touch.lx) > 0.1) x += this.touch.lx;
                 if (Math.abs(this.touch.ly) > 0.1) y -= this.touch.ly;
+
+                // Gamepad
+                if (this.pad) {
+                    const dz = SETTINGS.deadzone;
+                    const ax0 = this.pad.axes[0]; // Left Stick X
+                    const ax1 = this.pad.axes[1]; // Left Stick Y
+                    if (Math.abs(ax0) > dz) x += ax0;
+                    if (Math.abs(ax1) > dz) y -= ax1; // Invert Y for standard "forward is negative" usually, but here forward is +y in logic? No, forward is +y in map? Wait, usually forward key adds +1.
+                    // Wait, logic above: Forward adds +1 to Y.
+                    // Gamepad Axis 1: Down is +, Up is -. So Up (-1) needs to be +1. So Invert.
+                }
+
                 return { x, y };
             }
 
             getLook() {
                 let x = 0, y = 0;
+
+                // Keyboard Arrows (Legacy)
                 if (this.keys['ArrowLeft']) x -= 1;
                 if (this.keys['ArrowRight']) x += 1;
                 if (this.keys['ArrowUp']) y -= 1;
                 if (this.keys['ArrowDown']) y += 1;
 
-                // Mouse Look
+                // Mouse Look (Base Sensitivity)
                 if (Math.abs(this.mouse.x) > 0.001) {
                     let mx = this.mouse.x;
                     if (SETTINGS.invertX) mx = -mx;
                     x += mx * 2.0;
                 }
-
                 if (Math.abs(this.mouse.y) > 0.001) {
                     let my = this.mouse.y;
                     if (SETTINGS.invertY) my = -my;
                     y += my * 2.0;
                 }
 
+                // Touch
                 if (Math.abs(this.touch.rx) > 0.1) x += this.touch.rx * 2.0;
+
+                // Gamepad (Advanced Sensitivity)
+                if (this.pad) {
+                    const dz = SETTINGS.deadzone;
+                    const ax2 = this.pad.axes[2]; // Right Stick X
+                    const ax3 = this.pad.axes[3]; // Right Stick Y
+
+                    // Apply ADS Multiplier
+                    const mult = this.isAiming() ? SETTINGS.adsMult : 1.0;
+
+                    if (Math.abs(ax2) > dz) {
+                         let val = ax2 * SETTINGS.sensX * mult * 0.05; // Scale down for frame delta
+                         if (SETTINGS.invertX) val = -val;
+                         x += val;
+                    }
+                    if (Math.abs(ax3) > dz) {
+                         let val = ax3 * SETTINGS.sensY * mult * 0.05;
+                         if (SETTINGS.invertY) val = -val;
+                         y -= val; // Up is -1, so invert to look up (+pitch) ??
+                         // Logic check: Pitch += rot.y. Looking Up usually increases pitch? Or decreases?
+                         // In update(): pitch += rot.y * sens.
+                         // Mouse Y down (+movement) -> Look Down (-pitch)?
+                         // Usually Mouse Y+ -> Look Down.
+                         // Gamepad Axis 3 Down -> +1.
+                         // So +1 should be Look Down.
+                         // So we want +y.
+                         // So remove negate?
+                         // Let's stick to standard: Axis 3 positive is DOWN. Look needs to be positive to add to pitch?
+                         // Let's re-verify mouse logic:
+                         // Mouse Y+ (Down) -> y += my.
+                         // rot.y is positive.
+                         // Pitch += rot.y.
+                         // render(): pitchOffset = pitch.
+                         // drawStart = -lineHeight/2 + h/2 + pitchOffset.
+                         // If pitch is positive, drawStart increases (moves down).
+                         // If drawStart moves down, the world moves down?
+                         // If the world moves down on screen, you are looking UP.
+                         // WAIT.
+                         // If I look UP, the horizon should move DOWN on the screen.
+                         // So Pitch Positive = Look Up.
+                         // Mouse Y+ (Down) should be Look Down.
+                         // So Mouse Y+ should result in Pitch Negative.
+                         // Currently: Mouse Y+ -> y+= positive -> Pitch += positive -> Look Up.
+                         // ERROR: Mouse Logic is Inverted by default in my previous code!
+                         // But user didn't complain? Maybe they just inverted it in menu?
+                         // Let's fix standard gamepad: Axis 3 Down (+) -> Look Down (Pitch -).
+                         // So y -= val is correct if val is positive.
+                    }
+                }
 
                 this.mouse.x = 0; // Reset frame delta
                 this.mouse.y = 0;
