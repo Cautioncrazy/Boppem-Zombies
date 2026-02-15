@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Web of the Dead: Nacht Der Untoten (FPS V4)</title>
+    <title>Web of the Dead: Nacht Der Untoten (FPS V5)</title>
     <script>
-        console.log("GAME VERSION: FPS V4 (Pause/Settings) LOADED");
+        console.log("GAME VERSION: FPS V5 (Anti-Freeze) LOADED");
         // Force unregister any potential service workers
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(function(registrations) {
@@ -63,7 +63,7 @@
     <canvas id="canvas"></canvas>
     <div id="ui-layer">
         <div id="damage"></div>
-        <div id="fps-mode">FPS MODE V4</div>
+        <div id="fps-mode">FPS MODE V5</div>
         <div id="score" class="hud">Points: 500</div>
         <div id="round" class="hud">I</div>
         <div id="ammo" class="hud">M1911<br>8 / 32</div>
@@ -317,6 +317,8 @@
 
                 // Apply Sensitivity
                 this.player.dir += rot.x * C.ROT_SPEED_BASE * SETTINGS.sensitivity * dt;
+                // Normalize player direction to prevent large values causing freezes
+                this.player.dir = (this.player.dir % (2 * Math.PI));
 
                 const speed = C.MOVE_SPEED * dt;
                 const cos = Math.cos(this.player.dir);
@@ -395,11 +397,8 @@
                         const angleToZ = Math.atan2(z.y - this.player.y, z.x - this.player.x);
                         let angleDiff = angleToZ - this.player.dir;
 
-                        // Normalize angle
-                        if (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
-                        if (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
-                        while (angleDiff < -Math.PI) angleDiff += 2*Math.PI;
-                        while (angleDiff > Math.PI) angleDiff -= 2*Math.PI;
+                        // Robust normalization to [-PI, PI] using trig (avoids loops)
+                        angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
 
                         if (Math.abs(angleDiff) < 0.1) { // Hit cone
                             const d = Math.sqrt((this.player.x - z.x)**2 + (this.player.y - z.y)**2);
