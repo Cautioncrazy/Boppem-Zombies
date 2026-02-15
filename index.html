@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Web of the Dead: Nacht Der Untoten (FPS)</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; color: #fff; font-family: Courier, monospace; touch-action: none; user-select: none; }
+        canvas { display: block; width: 100%; height: 100%; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        .hud { position: absolute; text-shadow: 2px 2px 0 #000; font-weight: bold; }
+        #score { top: 20px; left: 20px; font-size: 24px; color: #ffd700; }
+        #round { bottom: 20px; left: 20px; font-size: 36px; color: #bd0000; }
+        #ammo { bottom: 20px; right: 20px; text-align: right; font-size: 24px; }
+        #prompt { top: 60%; left: 50%; transform: translate(-50%, -50%); font-size: 20px; background: rgba(0,0,0,0.7); padding: 10px; display: none; }
+        #damage { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: red; opacity: 0; transition: opacity 0.2s; pointer-events: none; }
+        #game-over { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(50,0,0,0.9); display: none; flex-direction: column; justify-content: center; align-items: center; pointer-events: auto; }
+        #game-over h1 { color: #bd0000; font-size: 60px; margin: 0; }
+        #game-over button { margin-top: 20px; padding: 15px 30px; font-size: 24px; cursor: pointer; background: #444; color: #fff; border: 2px solid #fff; }
+
+        /* Mobile Controls */
+        .touch-zone { position: absolute; bottom: 20px; width: 150px; height: 150px; border: 2px solid rgba(255,255,255,0.3); border-radius: 50%; pointer-events: auto; display: none; }
+        .touch-knob { width: 50px; height: 50px; background: rgba(255,255,255,0.5); border-radius: 50%; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+        #stick-left { left: 20px; }
+        #stick-right { right: 20px; }
+        #btn-action { position: absolute; bottom: 180px; right: 40px; width: 80px; height: 80px; background: rgba(0,255,0,0.3); border: 2px solid #0f0; border-radius: 50%; display: none; justify-content: center; align-items: center; font-size: 30px; pointer-events: auto; }
+        #btn-reload { position: absolute; bottom: 180px; right: 140px; width: 60px; height: 60px; background: rgba(255,255,0,0.3); border: 2px solid #ff0; border-radius: 50%; display: none; justify-content: center; align-items: center; font-size: 20px; pointer-events: auto; }
+        #btn-fire { position: absolute; bottom: 80px; right: 180px; width: 80px; height: 80px; background: rgba(255,0,0,0.3); border: 2px solid #f00; border-radius: 50%; display: none; justify-content: center; align-items: center; font-size: 20px; pointer-events: auto; }
+
+        @media (hover: none) and (pointer: coarse) {
+            .touch-zone, #btn-action, #btn-reload, #btn-fire { display: flex; }
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="ui-layer">
+        <div id="damage"></div>
+        <div id="score" class="hud">Points: 500</div>
+        <div id="round" class="hud">I</div>
+        <div id="ammo" class="hud">M1911<br>8 / 32</div>
+        <div id="prompt" class="hud">Press F to Interact</div>
+
+        <div id="stick-left" class="touch-zone"><div class="touch-knob"></div></div>
+        <div id="stick-right" class="touch-zone"><div class="touch-knob"></div></div>
+        <div id="btn-action">🖐️</div>
+        <div id="btn-reload">↻</div>
+        <div id="btn-fire">🔥</div>
+
+        <div id="game-over">
+            <h1>GAME OVER</h1>
+            <h2 id="final-score">Score: 0</h2>
+            <h3 id="final-round">Round: 1</h3>
+            <button onclick="location.reload()">TRY AGAIN</button>
+        </div>
+    </div>
+
+    <script>
+        // --- CONSTANTS ---
+        const C = {
+            FOV: Math.PI / 3,
+            RES: 2, // 1=High, 2=Med, 4=Low
+            MAX_DEPTH: 20,
+            MOVE_SPEED: 3.0,
+            ROT_SPEED: 2.0,
+            PLAYER_RADIUS: 0.3,
+            MAP_SIZE: 20
+        };
+
+        // --- MAP & ASSETS ---
+        // 0: Empty, 1: Wall, 2: Window, 3: Door (Closed), 4: WallBuy
+        const MAP = [
+            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+            [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+            [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+            [1,0,0,0,0,0,3,0,0,0,0,0,0,0,0,0,0,0,0,1], // Door to Help Room (Col 6, Row 3)
+            [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+            [1,2,1,0,0,0,1,1,1,1,1,1,1,1,0,0,0,0,0,1], // Window (Col 1, Row 5)
+            [1,0,1,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,1],
+            [1,0,1,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,1],
+            [1,0,1,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0,1], // Window (Col 13, Row 8)
+            [1,0,1,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,1],
+            [1,0,1,1,1,3,1,1,1,2,1,1,1,1,0,0,0,0,0,1], // Door (Col 5, Row 10), Window (Col 9, Row 10)
+            [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+            [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+            [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+        ];
+        for(let i=MAP.length; i<20; i++) MAP.push(new Array(20).fill(1));
+
+        const OBJECTS = [
+            { type: 'door', x: 6, y: 3, cost: 1000, targetZone: 1, open: false },
+            { type: 'door', x: 5, y: 10, cost: 1000, targetZone: 2, open: false },
+            { type: 'window', x: 1, y: 5, boards: 6, maxBoards: 6, lastDamage: 0 },
+            { type: 'window', x: 13, y: 8, boards: 6, maxBoards: 6, lastDamage: 0 },
+            { type: 'window', x: 9, y: 10, boards: 6, maxBoards: 6, lastDamage: 0 },
+            { type: 'wallbuy', x: 2, y: 1, weapon: 'Kar98k', cost: 200 }
+        ];
+
+        const WEAPONS = {
+            'M1911': { name: 'M1911', damage: 20, fireRate: 0.4, magSize: 8, reserveMax: 32, reloadTime: 1.5, spread: 0.05, color: '#555' },
+            'Kar98k': { name: 'Kar98k', damage: 100, fireRate: 1.0, magSize: 5, reserveMax: 50, reloadTime: 2.5, spread: 0.01, color: '#8B4513' },
+            'RayGun': { name: 'Ray Gun', damage: 1000, fireRate: 0.3, magSize: 20, reserveMax: 160, reloadTime: 3.0, spread: 0.0, color: '#0f0' }
+        };
+
+        // --- GAME ---
+        class Game {
+            constructor() {
+                this.canvas = document.getElementById('canvas');
+                this.ctx = this.canvas.getContext('2d', { alpha: false });
+                this.resize();
+
+                this.player = {
+                    x: 3.5, y: 2.5, dir: 0,
+                    health: 100, maxHealth: 100,
+                    lastDamage: 0,
+                    score: 500,
+                    inventory: [ { ...WEAPONS['M1911'], currentMag: 8, reserve: 32 } ],
+                    currentWeapon: 0,
+                    lastFire: 0, reloading: false
+                };
+
+                this.zombies = [];
+                this.bullets = [];
+                this.round = 1;
+                this.spawnTimer = 0;
+                this.zombiesToSpawn = 5;
+                this.lastTime = 0;
+                this.running = true;
+
+                this.input = new InputHandler();
+
+                // Bindings
+                this.loop = this.loop.bind(this);
+                requestAnimationFrame(this.loop);
+            }
+
+            resize() {
+                this.canvas.width = window.innerWidth;
+                this.canvas.height = window.innerHeight;
+                this.ctx.imageSmoothingEnabled = false;
+            }
+
+            loop(timestamp) {
+                if (!this.running) return;
+                const dt = (timestamp - this.lastTime) / 1000;
+                this.lastTime = timestamp;
+                this.update(Math.min(dt, 0.1));
+                this.render();
+                requestAnimationFrame(this.loop);
+            }
+
+            update(dt) {
+                if (this.player.health <= 0) return this.gameOver();
+
+                // Health Regen
+                if (this.player.health < this.player.maxHealth && Date.now() - this.player.lastDamage > 5000) {
+                    this.player.health += 20 * dt;
+                    if (this.player.health > this.player.maxHealth) this.player.health = this.player.maxHealth;
+                    this.updateHUD();
+                }
+
+                // Player Movement
+                const move = this.input.getMove();
+                const rot = this.input.getLook();
+
+                this.player.dir += rot.x * C.ROT_SPEED * dt;
+
+                const speed = C.MOVE_SPEED * dt;
+                const cos = Math.cos(this.player.dir);
+                const sin = Math.sin(this.player.dir);
+
+                // Move Vector relative to direction
+                // W moves forward (cos, sin)
+                // A strafes left (sin, -cos)
+                let dx = (cos * move.y - sin * move.x) * speed;
+                let dy = (sin * move.y + cos * move.x) * speed;
+
+                if (MAP[Math.floor(this.player.y)][Math.floor(this.player.x + dx * 2)] === 0) this.player.x += dx;
+                if (MAP[Math.floor(this.player.y + dy * 2)][Math.floor(this.player.x)] === 0) this.player.y += dy;
+
+                // Input Actions
+                if (this.input.keys['KeyR']) this.reload();
+                if (this.input.keys['Space'] || this.input.keys['KeyF'] || this.input.buttons.fire) this.fire(timestamp = Date.now()); // Reuse fire button for shoot?
+                if (this.input.keys['KeyE'] || this.input.buttons.action) this.interact();
+
+                // Zombie Spawning
+                if (this.zombiesToSpawn > 0) {
+                    this.spawnTimer += dt;
+                    if (this.spawnTimer > 3.0) {
+                        this.spawnZombie();
+                        this.spawnTimer = 0;
+                        this.zombiesToSpawn--;
+                    }
+                } else if (this.zombies.length === 0) {
+                    this.round++;
+                    this.zombiesToSpawn = Math.floor(5 * Math.pow(1.2, this.round-1));
+                    document.getElementById('round').innerText = this.toRoman(this.round);
+                }
+
+                // Zombie Logic
+                this.zombies.forEach(z => {
+                    const dist = Math.sqrt((this.player.x - z.x)**2 + (this.player.y - z.y)**2);
+                    if (dist > 0.5) {
+                        const angle = Math.atan2(this.player.y - z.y, this.player.x - z.x);
+                        let zdx = Math.cos(angle) * dt * (0.8 + this.round * 0.05);
+                        let zdy = Math.sin(angle) * dt * (0.8 + this.round * 0.05);
+
+                        if (MAP[Math.floor(z.y)][Math.floor(z.x + zdx * 1.5)] <= 0) z.x += zdx; // Allow walking through empty(0)
+                        if (MAP[Math.floor(z.y + zdy * 1.5)][Math.floor(z.x)] <= 0) z.y += zdy;
+                    } else {
+                        if (Date.now() - z.lastAttack > 1000) {
+                            this.player.health -= 20;
+                            this.player.lastDamage = Date.now();
+                            z.lastAttack = Date.now();
+                            this.updateHUD();
+                        }
+                    }
+                });
+                this.zombies = this.zombies.filter(z => z.health > 0);
+
+                // Check Interactable Prompt
+                this.checkInteraction();
+            }
+
+            spawnZombie() {
+                const w = OBJECTS.filter(o => o.type === 'window')[0]; // Just use first window for prototype
+                if(w) this.zombies.push({ x: w.x, y: w.y, health: 100 * Math.pow(1.1, this.round-1), lastAttack: 0 });
+            }
+
+            fire(time) {
+                const w = this.player.inventory[this.player.currentWeapon];
+                if (time - this.player.lastFire > w.fireRate * 1000 && w.currentMag > 0 && !this.player.reloading) {
+                    w.currentMag--;
+                    this.player.lastFire = time;
+                    this.updateHUD();
+
+                    // Hitscan Logic
+                    // Raycast from player center
+                    let closestDist = Infinity;
+                    let hitZombie = null;
+
+                    this.zombies.forEach(z => {
+                        // Project zombie to screen space to check aim? Or simple angle check?
+                        // Angle check is easier.
+                        const angleToZ = Math.atan2(z.y - this.player.y, z.x - this.player.x);
+                        let angleDiff = angleToZ - this.player.dir;
+                        // Normalize angle
+                        while (angleDiff < -Math.PI) angleDiff += 2*Math.PI;
+                        while (angleDiff > Math.PI) angleDiff -= 2*Math.PI;
+
+                        if (Math.abs(angleDiff) < 0.1) { // Hit cone
+                            const d = Math.sqrt((this.player.x - z.x)**2 + (this.player.y - z.y)**2);
+                            if (d < closestDist) {
+                                closestDist = d;
+                                hitZombie = z;
+                            }
+                        }
+                    });
+
+                    if (hitZombie) {
+                        hitZombie.health -= w.damage;
+                        this.player.score += 10;
+                        if (hitZombie.health <= 0) this.player.score += 60;
+                        this.updateHUD();
+                    }
+                }
+            }
+
+            reload() {
+                const w = this.player.inventory[this.player.currentWeapon];
+                if (!this.player.reloading && w.currentMag < w.magSize && w.reserve > 0) {
+                    this.player.reloading = true;
+                    document.getElementById('ammo').innerText = "RELOADING...";
+                    setTimeout(() => {
+                        const needed = w.magSize - w.currentMag;
+                        const taken = Math.min(needed, w.reserve);
+                        w.currentMag += taken;
+                        w.reserve -= taken;
+                        this.player.reloading = false;
+                        this.updateHUD();
+                    }, w.reloadTime * 1000);
+                }
+            }
+
+            interact() {
+                // Check closest interactable in front
+                let target = null;
+                let minDist = 2.0;
+
+                OBJECTS.forEach(obj => {
+                    const d = Math.sqrt((this.player.x - obj.x)**2 + (this.player.y - obj.y)**2);
+                    if (d < minDist) {
+                        target = obj;
+                        minDist = d;
+                    }
+                });
+
+                if (target) {
+                    if (target.type === 'window') {
+                        if (target.boards < target.maxBoards) {
+                            target.boards++;
+                            this.player.score += 10;
+                            this.updateHUD();
+                        }
+                    } else if (target.type === 'door' && !target.open) {
+                        if (this.player.score >= target.cost) {
+                            this.player.score -= target.cost;
+                            target.open = true;
+                            MAP[target.y][target.x] = 4; // Open Door ID
+                            this.updateHUD();
+                        }
+                    } else if (target.type === 'wallbuy') {
+                        if (this.player.score >= target.cost) {
+                            const newWep = WEAPONS[target.weapon];
+                            // Replace current or add? Simply replace for prototype
+                            this.player.inventory[0] = { ...newWep, currentMag: newWep.magSize, reserve: newWep.reserveMax };
+                            this.player.score -= target.cost;
+                            this.updateHUD();
+                        }
+                    }
+                }
+            }
+
+            checkInteraction() {
+                let prompt = "";
+                let minDist = 2.0;
+                OBJECTS.forEach(obj => {
+                    const d = Math.sqrt((this.player.x - obj.x)**2 + (this.player.y - obj.y)**2);
+                    if (d < minDist) {
+                        if (obj.type === 'window' && obj.boards < obj.maxBoards) prompt = "Repair Window";
+                        if (obj.type === 'door' && !obj.open) prompt = `Open Door [${obj.cost}]`;
+                        if (obj.type === 'wallbuy') prompt = `Buy ${obj.weapon} [${obj.cost}]`;
+                    }
+                });
+                const el = document.getElementById('prompt');
+                if (prompt) {
+                    el.style.display = 'block';
+                    el.innerText = "Press F/Tap Hand: " + prompt;
+                } else {
+                    el.style.display = 'none';
+                }
+            }
+
+            updateHUD() {
+                const w = this.player.inventory[this.player.currentWeapon];
+                document.getElementById('ammo').innerHTML = `${w.name}<br>${w.currentMag} / ${w.reserve}`;
+                document.getElementById('score').innerText = `Points: ${this.player.score}`;
+                document.getElementById('damage').style.opacity = (1 - this.player.health/100) * 0.8;
+            }
+
+            gameOver() {
+                this.running = false;
+                document.getElementById('game-over').style.display = 'flex';
+                document.getElementById('final-score').innerText = 'Score: ' + this.player.score;
+                document.getElementById('final-round').innerText = 'Round: ' + this.round;
+            }
+
+            toRoman(num) {
+                if (num === 1) return "I";
+                if (num === 2) return "II";
+                if (num === 3) return "III";
+                if (num === 4) return "IV";
+                return num.toString();
+            }
+
+            render() {
+                const w = this.canvas.width;
+                const h = this.canvas.height;
+                const mw = w / C.RES;
+
+                // Ceiling/Floor
+                this.ctx.fillStyle = '#111';
+                this.ctx.fillRect(0,0,w,h/2);
+                this.ctx.fillStyle = '#222';
+                this.ctx.fillRect(0,h/2,w,h/2);
+
+                const zBuffer = new Array(Math.ceil(mw)).fill(0);
+
+                // Raycast Walls
+                for(let x=0; x<mw; x++) {
+                    const cameraX = 2 * x / mw - 1;
+                    const rayDirX = Math.cos(this.player.dir) + Math.cos(this.player.dir + Math.PI/2) * cameraX * 0.66;
+                    const rayDirY = Math.sin(this.player.dir) + Math.sin(this.player.dir + Math.PI/2) * cameraX * 0.66;
+
+                    let mapX = Math.floor(this.player.x);
+                    let mapY = Math.floor(this.player.y);
+                    let sideDistX, sideDistY, perpWallDist, side, hit=0;
+                    const deltaDistX = Math.abs(1/rayDirX);
+                    const deltaDistY = Math.abs(1/rayDirY);
+                    const stepX = (rayDirX < 0) ? -1 : 1;
+                    const stepY = (rayDirY < 0) ? -1 : 1;
+
+                    if (rayDirX < 0) sideDistX = (this.player.x - mapX) * deltaDistX;
+                    else sideDistX = (mapX + 1.0 - this.player.x) * deltaDistX;
+                    if (rayDirY < 0) sideDistY = (this.player.y - mapY) * deltaDistY;
+                    else sideDistY = (mapY + 1.0 - this.player.y) * deltaDistY;
+
+                    // DDA
+                    let dist = 0;
+                    while (hit === 0 && dist < C.MAX_DEPTH) {
+                        if (sideDistX < sideDistY) { sideDistX += deltaDistX; mapX += stepX; side = 0; }
+                        else { sideDistY += deltaDistY; mapY += stepY; side = 1; }
+
+                        if (MAP[mapY] && MAP[mapY][mapX] > 0 && MAP[mapY][mapX] !== 4) hit = MAP[mapY][mapX]; // 4 is open door (empty)
+                        dist++;
+                    }
+
+                    if (side === 0) perpWallDist = (mapX - this.player.x + (1 - stepX) / 2) / rayDirX;
+                    else perpWallDist = (mapY - this.player.y + (1 - stepY) / 2) / rayDirY;
+
+                    zBuffer[x] = perpWallDist;
+
+                    const lineHeight = Math.floor(h / perpWallDist);
+                    const drawStart = -lineHeight / 2 + h / 2;
+                    let color = (hit === 1) ? '#666' : (hit === 2) ? '#8B4513' : (hit === 3) ? '#553311' : '#444';
+                    if (side === 1) color = shadeColor(color, -20);
+
+                    this.ctx.fillStyle = color;
+                    this.ctx.fillRect(x * C.RES, drawStart, C.RES, lineHeight);
+                }
+
+                // Sprite Casting (Zombies)
+                // Simplified Billboarding
+                // Sort sprites by distance
+                // Note: Full projection matrix logic is complex for single file without vector lib.
+                // We use a simplified angle-based approach for the prototype.
+
+                this.zombies.forEach(z => {
+                    const dx = z.x - this.player.x;
+                    const dy = z.y - this.player.y;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+
+                    // Angle to sprite relative to player angle
+                    const spriteAngle = Math.atan2(dy, dx) - this.player.dir;
+                    let diff = spriteAngle;
+                    while(diff < -Math.PI) diff += 2*Math.PI;
+                    while(diff > Math.PI) diff -= 2*Math.PI;
+
+                    // Only draw if in front
+                    if (Math.abs(diff) < C.FOV / 1.5) {
+                        const screenX = (0.5 * (diff / (C.FOV / 2)) + 0.5) * w;
+                        const spriteH = h / dist;
+                        const spriteW = spriteH * 0.6; // Zombies are tall
+                        const spriteTop = (h - spriteH) / 2;
+
+                        // Check ZBuffer for occlusion (approximate at center of sprite)
+                        // This is hacky but efficient.
+                        const zBufIdx = Math.floor(screenX / C.RES);
+                        if (zBufIdx >= 0 && zBufIdx < mw && dist < zBuffer[zBufIdx]) {
+                            this.ctx.fillStyle = '#0f0'; // Zombie Green
+                            this.ctx.fillRect(screenX - spriteW/2, spriteTop, spriteW, spriteH);
+
+                            // Eyes
+                            this.ctx.fillStyle = '#f00';
+                            this.ctx.fillRect(screenX - spriteW*0.2, spriteTop + spriteH*0.2, spriteW*0.1, spriteW*0.1);
+                            this.ctx.fillRect(screenX + spriteW*0.1, spriteTop + spriteH*0.2, spriteW*0.1, spriteW*0.1);
+                        }
+                    }
+                });
+
+                // Gun Model
+                const weapon = this.player.inventory[this.player.currentWeapon];
+                this.ctx.fillStyle = weapon.color || '#555';
+                const gunW = w * 0.15;
+                const gunH = h * 0.25;
+                const gunX = w/2 - gunW/2 + (this.player.reloading ? 0 : Math.sin(Date.now()/100)*5); // Idle sway
+                const gunY = h - gunH + (this.input.isFiring() ? 10 : 0) + (this.player.reloading ? 50 : 0); // Recoil/Reload anim
+
+                this.ctx.fillRect(gunX, gunY, gunW, gunH);
+            }
+        }
+
+        // --- INPUT ---
+        class InputHandler {
+            constructor() {
+                this.keys = {};
+                this.buttons = { fire: false, action: false, reload: false };
+                this.touch = { lx: 0, ly: 0, rx: 0 };
+                this.mouse = { x: 0 };
+
+                window.addEventListener('keydown', e => this.keys[e.code] = true);
+                window.addEventListener('keyup', e => this.keys[e.code] = false);
+
+                this.bindTouch('btn-action', 'action');
+                this.bindTouch('btn-reload', 'reload');
+                this.bindTouch('btn-fire', 'fire');
+
+                this.setupStick('stick-left', (x, y) => { this.touch.lx = x; this.touch.ly = y; });
+                this.setupStick('stick-right', (x, y) => { this.touch.rx = x; });
+
+                // Mouse Lock
+                document.getElementById('canvas').addEventListener('click', () => {
+                    document.getElementById('canvas').requestPointerLock();
+                });
+                document.addEventListener('mousemove', (e) => {
+                    if (document.pointerLockElement === document.getElementById('canvas')) {
+                        this.mouse.x += e.movementX * 0.002;
+                    }
+                });
+            }
+
+            bindTouch(id, action) {
+                const btn = document.getElementById(id);
+                btn.addEventListener('touchstart', (e) => { e.preventDefault(); this.buttons[action] = true; });
+                btn.addEventListener('touchend', (e) => { e.preventDefault(); this.buttons[action] = false; });
+            }
+
+            setupStick(id, cb) {
+                const el = document.getElementById(id);
+                const knob = el.querySelector('.touch-knob');
+                const handle = (e) => {
+                    e.preventDefault();
+                    const rect = el.getBoundingClientRect();
+                    const touch = e.changedTouches[0];
+                    const cx = rect.left + rect.width/2;
+                    const cy = rect.top + rect.height/2;
+                    const maxR = rect.width/2;
+                    let dx = touch.clientX - cx;
+                    let dy = touch.clientY - cy;
+                    const dist = Math.min(Math.sqrt(dx*dx+dy*dy), maxR);
+                    const angle = Math.atan2(dy, dx);
+                    dx = Math.cos(angle) * dist;
+                    dy = Math.sin(angle) * dist;
+                    knob.style.transform = `translate(-50%, -50%) translate(${dx}px, ${dy}px)`;
+                    cb(dx/maxR, dy/maxR);
+                };
+                el.addEventListener('touchstart', handle, {passive:false});
+                el.addEventListener('touchmove', handle, {passive:false});
+                el.addEventListener('touchend', () => {
+                    knob.style.transform = `translate(-50%, -50%)`;
+                    cb(0,0);
+                });
+            }
+
+            getMove() {
+                let x = 0, y = 0;
+                if (this.keys['KeyW']) y += 1;
+                if (this.keys['KeyS']) y -= 1;
+                if (this.keys['KeyA']) x -= 1;
+                if (this.keys['KeyD']) x += 1;
+                if (Math.abs(this.touch.lx) > 0.1) x += this.touch.lx;
+                if (Math.abs(this.touch.ly) > 0.1) y -= this.touch.ly;
+                return { x, y };
+            }
+
+            getLook() {
+                let x = 0;
+                if (this.keys['ArrowLeft']) x -= 1;
+                if (this.keys['ArrowRight']) x += 1;
+
+                // Mouse Look
+                if (Math.abs(this.mouse.x) > 0.001) x += this.mouse.x * 2.0;
+
+                if (Math.abs(this.touch.rx) > 0.1) x += this.touch.rx * 2.0;
+
+                this.mouse.x = 0; // Reset frame delta
+
+                return { x };
+            }
+
+            isFiring() { return this.keys['Space'] || this.buttons.fire; }
+        }
+
+        function shadeColor(color, percent) {
+            // Simplified shader: just return color for prototype stability
+            // Or parse hex.
+            return color;
+        }
+
+        window.onload = () => new Game();
+    </script>
+</body>
+</html>
