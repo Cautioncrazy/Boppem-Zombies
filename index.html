@@ -269,7 +269,7 @@
                 this.resize();
 
                 this.player = {
-                    x: 3.5, y: 2.5, dir: 0,
+                    x: 3.5, y: 2.5, dir: 0, pitch: 0,
                     health: 100, maxHealth: 100,
                     lastDamage: 0,
                     score: 500,
@@ -670,7 +670,7 @@
                     const lineHeight = Math.floor(h / perpWallDist);
                     // Apply pitch offset to drawStart
                     const drawStart = -lineHeight / 2 + h / 2 + pitchOffset;
-                    let color = (hit === 1) ? '#666' : (hit === 2) ? '#8B4513' : (hit === 3) ? '#553311' : '#444';
+                    let color = (hit === 1) ? '#666666' : (hit === 2) ? '#8B4513' : (hit === 3) ? '#553311' : '#444444';
 
                     // Simple Shader
                     if (side === 1) color = shadeColor(color, -20);
