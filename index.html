@@ -3,15 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Web of the Dead: Nacht Der Untoten (FPS V3)</title>
+    <title>Web of the Dead: Nacht Der Untoten (FPS V4)</title>
     <script>
-        console.log("GAME VERSION: FPS V3 (PC FIX) LOADED");
+        console.log("GAME VERSION: FPS V4 (Pause/Settings) LOADED");
         // Force unregister any potential service workers
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(function(registrations) {
                 for(let registration of registrations) {
                     registration.unregister();
-                    console.log('ServiceWorker unregistered.');
                 }
             });
         }
@@ -31,6 +30,21 @@
         #game-over button { margin-top: 20px; padding: 15px 30px; font-size: 24px; cursor: pointer; background: #444; color: #fff; border: 2px solid #fff; }
         #fps-mode { position: absolute; top: 20px; right: 20px; color: #0f0; font-size: 16px; opacity: 0.7; }
 
+        /* Pause Menu */
+        #pause-menu { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); display: none; flex-direction: column; align-items: center; justify-content: center; pointer-events: auto; z-index: 100; }
+        #pause-menu h1 { color: #fff; font-size: 40px; margin-bottom: 20px; }
+        .menu-section { width: 80%; max-width: 400px; margin-bottom: 20px; border: 1px solid #444; padding: 10px; background: rgba(50,50,50,0.5); }
+        .menu-section h3 { margin-top: 0; border-bottom: 1px solid #666; padding-bottom: 5px; }
+        .setting-row { display: flex; justify-content: space-between; align-items: center; margin: 10px 0; }
+        .setting-row label { font-size: 18px; }
+        .setting-row input[type="range"] { width: 50%; }
+        .setting-row input[type="checkbox"] { width: 20px; height: 20px; }
+        .key-bind { background: #333; padding: 5px 10px; border: 1px solid #666; cursor: pointer; min-width: 80px; text-align: center; }
+        .key-bind:hover { background: #555; }
+        .key-bind.listening { background: #d00; color: white; border-color: red; }
+        button.menu-btn { padding: 10px 20px; font-size: 20px; cursor: pointer; background: #444; color: #fff; border: 2px solid #fff; margin-top: 10px; }
+        button.menu-btn:hover { background: #666; }
+
         /* Mobile Controls */
         .touch-zone { position: absolute; bottom: 20px; width: 150px; height: 150px; border: 2px solid rgba(255,255,255,0.3); border-radius: 50%; pointer-events: auto; display: none; }
         .touch-knob { width: 50px; height: 50px; background: rgba(255,255,255,0.5); border-radius: 50%; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); pointer-events: none; }
@@ -49,11 +63,63 @@
     <canvas id="canvas"></canvas>
     <div id="ui-layer">
         <div id="damage"></div>
-        <div id="fps-mode">FPS MODE V3 (PC FIX)</div>
+        <div id="fps-mode">FPS MODE V4</div>
         <div id="score" class="hud">Points: 500</div>
         <div id="round" class="hud">I</div>
         <div id="ammo" class="hud">M1911<br>8 / 32</div>
         <div id="prompt" class="hud">Press F to Interact</div>
+
+        <!-- Pause Menu -->
+        <div id="pause-menu">
+            <h1>PAUSED</h1>
+
+            <div class="menu-section">
+                <h3>Controls</h3>
+                <div class="setting-row">
+                    <label>Sensitivity</label>
+                    <input type="range" id="sens-slider" min="1" max="10" step="0.5" value="3.0">
+                    <span id="sens-val">3.0</span>
+                </div>
+                <div class="setting-row">
+                    <label>Invert Y</label>
+                    <input type="checkbox" id="invert-y">
+                </div>
+                <div class="setting-row">
+                    <label>Invert X</label>
+                    <input type="checkbox" id="invert-x">
+                </div>
+            </div>
+
+            <div class="menu-section">
+                <h3>Key Bindings (Click to Remap)</h3>
+                <div class="setting-row">
+                    <label>Forward</label>
+                    <div class="key-bind" data-action="forward">W</div>
+                </div>
+                <div class="setting-row">
+                    <label>Backward</label>
+                    <div class="key-bind" data-action="backward">S</div>
+                </div>
+                <div class="setting-row">
+                    <label>Left</label>
+                    <div class="key-bind" data-action="left">A</div>
+                </div>
+                <div class="setting-row">
+                    <label>Right</label>
+                    <div class="key-bind" data-action="right">D</div>
+                </div>
+                <div class="setting-row">
+                    <label>Interact</label>
+                    <div class="key-bind" data-action="interact">F</div>
+                </div>
+                <div class="setting-row">
+                    <label>Reload</label>
+                    <div class="key-bind" data-action="reload">R</div>
+                </div>
+            </div>
+
+            <button class="menu-btn" id="resume-btn">RESUME</button>
+        </div>
 
         <div id="stick-left" class="touch-zone"><div class="touch-knob"></div></div>
         <div id="stick-right" class="touch-zone"><div class="touch-knob"></div></div>
@@ -76,25 +142,24 @@
             RES: 2, // 1=High, 2=Med, 4=Low
             MAX_DEPTH: 20,
             MOVE_SPEED: 3.0,
-            ROT_SPEED: 2.0,
+            ROT_SPEED_BASE: 2.0, // Base speed multiplier
             PLAYER_RADIUS: 0.3,
             MAP_SIZE: 20
         };
 
         // --- MAP & ASSETS ---
-        // 0: Empty, 1: Wall, 2: Window, 3: Door (Closed), 4: WallBuy
         const MAP = [
             [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
             [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1],
             [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1],
-            [1,0,0,0,0,0,3,0,0,0,0,0,0,0,0,0,0,0,0,1], // Door to Help Room (Col 6, Row 3)
+            [1,0,0,0,0,0,3,0,0,0,0,0,0,0,0,0,0,0,0,1],
             [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1],
-            [1,2,1,0,0,0,1,1,1,1,1,1,1,1,0,0,0,0,0,1], // Window (Col 1, Row 5)
+            [1,2,1,0,0,0,1,1,1,1,1,1,1,1,0,0,0,0,0,1],
             [1,0,1,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,1],
             [1,0,1,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,1],
-            [1,0,1,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0,1], // Window (Col 13, Row 8)
+            [1,0,1,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0,1],
             [1,0,1,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,1],
-            [1,0,1,1,1,3,1,1,1,2,1,1,1,1,0,0,0,0,0,1], // Door (Col 5, Row 10), Window (Col 9, Row 10)
+            [1,0,1,1,1,3,1,1,1,2,1,1,1,1,0,0,0,0,0,1],
             [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
             [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
             [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
@@ -115,6 +180,21 @@
             'M1911': { name: 'M1911', damage: 20, fireRate: 0.4, magSize: 8, reserveMax: 32, reloadTime: 1.5, spread: 0.05, color: '#555' },
             'Kar98k': { name: 'Kar98k', damage: 100, fireRate: 1.0, magSize: 5, reserveMax: 50, reloadTime: 2.5, spread: 0.01, color: '#8B4513' },
             'RayGun': { name: 'Ray Gun', damage: 1000, fireRate: 0.3, magSize: 20, reserveMax: 160, reloadTime: 3.0, spread: 0.0, color: '#0f0' }
+        };
+
+        // --- SETTINGS ---
+        const SETTINGS = {
+            sensitivity: 3.0,
+            invertY: false,
+            invertX: false,
+            keys: {
+                forward: 'KeyW',
+                backward: 'KeyS',
+                left: 'KeyA',
+                right: 'KeyD',
+                interact: 'KeyF',
+                reload: 'KeyR'
+            }
         };
 
         // --- GAME ---
@@ -141,12 +221,49 @@
                 this.zombiesToSpawn = 5;
                 this.lastTime = 0;
                 this.running = true;
+                this.paused = false;
 
-                this.input = new InputHandler();
+                this.input = new InputHandler(this);
+                this.setupUI();
 
                 // Bindings
                 this.loop = this.loop.bind(this);
                 requestAnimationFrame(this.loop);
+            }
+
+            setupUI() {
+                // Settings UI Handlers
+                const slider = document.getElementById('sens-slider');
+                const valDisplay = document.getElementById('sens-val');
+                slider.addEventListener('input', (e) => {
+                    SETTINGS.sensitivity = parseFloat(e.target.value);
+                    valDisplay.innerText = SETTINGS.sensitivity.toFixed(1);
+                });
+
+                document.getElementById('invert-y').addEventListener('change', e => SETTINGS.invertY = e.target.checked);
+                document.getElementById('invert-x').addEventListener('change', e => SETTINGS.invertX = e.target.checked);
+                document.getElementById('resume-btn').addEventListener('click', () => this.togglePause(false));
+
+                // Key Rebinding
+                document.querySelectorAll('.key-bind').forEach(el => {
+                    el.addEventListener('click', () => {
+                        el.classList.add('listening');
+                        el.innerText = 'Press Key...';
+
+                        const handler = (e) => {
+                            e.preventDefault();
+                            const action = el.dataset.action;
+                            SETTINGS.keys[action] = e.code;
+                            el.innerText = e.code.replace('Key', '');
+                            el.classList.remove('listening');
+                            window.removeEventListener('keydown', handler);
+
+                            // Re-init input keys
+                            this.input.keys[e.code] = false; // Reset state
+                        };
+                        window.addEventListener('keydown', handler, { once: true });
+                    });
+                });
             }
 
             resize() {
@@ -155,12 +272,32 @@
                 this.ctx.imageSmoothingEnabled = false;
             }
 
+            togglePause(state) {
+                this.paused = state;
+                const menu = document.getElementById('pause-menu');
+                if (this.paused) {
+                    menu.style.display = 'flex';
+                    document.exitPointerLock();
+                    this.lastTime = 0; // Reset delta time
+                } else {
+                    menu.style.display = 'none';
+                    this.canvas.requestPointerLock();
+                    this.lastTime = performance.now();
+                }
+            }
+
             loop(timestamp) {
                 if (!this.running) return;
+
+                if (this.lastTime === 0) this.lastTime = timestamp; // First frame fix
                 const dt = (timestamp - this.lastTime) / 1000;
+
+                if (!this.paused) {
+                    this.update(Math.min(dt, 0.1));
+                    this.render();
+                }
+
                 this.lastTime = timestamp;
-                this.update(Math.min(dt, 0.1));
-                this.render();
                 requestAnimationFrame(this.loop);
             }
 
@@ -178,15 +315,14 @@
                 const move = this.input.getMove();
                 const rot = this.input.getLook();
 
-                this.player.dir += rot.x * C.ROT_SPEED * dt;
+                // Apply Sensitivity
+                this.player.dir += rot.x * C.ROT_SPEED_BASE * SETTINGS.sensitivity * dt;
 
                 const speed = C.MOVE_SPEED * dt;
                 const cos = Math.cos(this.player.dir);
                 const sin = Math.sin(this.player.dir);
 
                 // Move Vector relative to direction
-                // W moves forward (cos, sin)
-                // A strafes left (sin, -cos)
                 let dx = (cos * move.y - sin * move.x) * speed;
                 let dy = (sin * move.y + cos * move.x) * speed;
 
@@ -194,9 +330,11 @@
                 if (MAP[Math.floor(this.player.y + dy * 2)][Math.floor(this.player.x)] === 0) this.player.y += dy;
 
                 // Input Actions
-                if (this.input.keys['KeyR']) this.reload();
+                if (this.input.isAction('reload')) this.reload();
                 if (this.input.isFiring()) this.fire(timestamp = Date.now());
-                if (this.input.keys['KeyE'] || this.input.keys['KeyF'] || this.input.buttons.action) this.interact();
+                if (this.input.isAction('interact') || this.input.buttons.action) this.interact();
+
+                // Pause Toggle (Debounced slightly handled in InputHandler)
 
                 // Zombie Spawning
                 if (this.zombiesToSpawn > 0) {
@@ -250,16 +388,16 @@
                     this.updateHUD();
 
                     // Hitscan Logic
-                    // Raycast from player center
                     let closestDist = Infinity;
                     let hitZombie = null;
 
                     this.zombies.forEach(z => {
-                        // Project zombie to screen space to check aim? Or simple angle check?
-                        // Angle check is easier.
                         const angleToZ = Math.atan2(z.y - this.player.y, z.x - this.player.x);
                         let angleDiff = angleToZ - this.player.dir;
+
                         // Normalize angle
+                        if (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+                        if (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
                         while (angleDiff < -Math.PI) angleDiff += 2*Math.PI;
                         while (angleDiff > Math.PI) angleDiff -= 2*Math.PI;
 
@@ -350,7 +488,7 @@
                 const el = document.getElementById('prompt');
                 if (prompt) {
                     el.style.display = 'block';
-                    el.innerText = "Press F/Tap Hand: " + prompt;
+                    el.innerText = `Press ${SETTINGS.keys.interact.replace('Key','')} to: ` + prompt;
                 } else {
                     el.style.display = 'none';
                 }
@@ -368,6 +506,7 @@
                 document.getElementById('game-over').style.display = 'flex';
                 document.getElementById('final-score').innerText = 'Score: ' + this.player.score;
                 document.getElementById('final-round').innerText = 'Round: ' + this.round;
+                document.exitPointerLock();
             }
 
             toRoman(num) {
@@ -440,11 +579,6 @@
                 }
 
                 // Sprite Casting (Zombies)
-                // Simplified Billboarding
-                // Sort sprites by distance
-                // Note: Full projection matrix logic is complex for single file without vector lib.
-                // We use a simplified angle-based approach for the prototype.
-
                 this.zombies.forEach(z => {
                     const dx = z.x - this.player.x;
                     const dy = z.y - this.player.y;
@@ -463,8 +597,6 @@
                         const spriteW = spriteH * 0.6; // Zombies are tall
                         const spriteTop = (h - spriteH) / 2;
 
-                        // Check ZBuffer for occlusion (approximate at center of sprite)
-                        // This is hacky but efficient.
                         const zBufIdx = Math.floor(screenX / C.RES);
                         if (zBufIdx >= 0 && zBufIdx < mw && dist < zBuffer[zBufIdx]) {
                             this.ctx.fillStyle = '#0f0'; // Zombie Green
@@ -492,18 +624,33 @@
 
         // --- INPUT ---
         class InputHandler {
-            constructor() {
+            constructor(game) {
+                this.game = game;
                 this.keys = {};
                 this.buttons = { fire: false, action: false, reload: false };
                 this.touch = { lx: 0, ly: 0, rx: 0 };
                 this.mouse = { x: 0 };
 
-                window.addEventListener('keydown', e => this.keys[e.code] = true);
+                window.addEventListener('keydown', e => {
+                    // Prevent default scrolling for game keys
+                    if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+
+                    // Pause Toggle
+                    if (e.code === 'Escape' || e.code === 'KeyP') {
+                        this.game.togglePause(!this.game.paused);
+                    }
+
+                    this.keys[e.code] = true;
+                });
+
                 window.addEventListener('keyup', e => this.keys[e.code] = false);
 
                 window.addEventListener('mousedown', e => {
                     if (document.pointerLockElement === document.getElementById('canvas')) {
                         if (e.button === 0) this.buttons.fire = true;
+                    } else if (!this.game.paused) {
+                         // Click to capture if not paused
+                        document.getElementById('canvas').requestPointerLock();
                     }
                 });
                 window.addEventListener('mouseup', e => {
@@ -517,10 +664,6 @@
                 this.setupStick('stick-left', (x, y) => { this.touch.lx = x; this.touch.ly = y; });
                 this.setupStick('stick-right', (x, y) => { this.touch.rx = x; });
 
-                // Mouse Lock
-                document.getElementById('canvas').addEventListener('click', () => {
-                    document.getElementById('canvas').requestPointerLock();
-                });
                 document.addEventListener('mousemove', (e) => {
                     if (document.pointerLockElement === document.getElementById('canvas')) {
                         this.mouse.x += e.movementX * 0.002;
@@ -561,12 +704,18 @@
                 });
             }
 
+            // Maps physical input to game actions via SETTINGS
+            isAction(action) {
+                const key = SETTINGS.keys[action];
+                return this.keys[key];
+            }
+
             getMove() {
                 let x = 0, y = 0;
-                if (this.keys['KeyW']) y += 1;
-                if (this.keys['KeyS']) y -= 1;
-                if (this.keys['KeyA']) x -= 1;
-                if (this.keys['KeyD']) x += 1;
+                if (this.isAction('forward')) y += 1;
+                if (this.isAction('backward')) y -= 1;
+                if (this.isAction('left')) x -= 1;
+                if (this.isAction('right')) x += 1;
                 if (Math.abs(this.touch.lx) > 0.1) x += this.touch.lx;
                 if (Math.abs(this.touch.ly) > 0.1) y -= this.touch.ly;
                 return { x, y };
@@ -578,7 +727,11 @@
                 if (this.keys['ArrowRight']) x += 1;
 
                 // Mouse Look
-                if (Math.abs(this.mouse.x) > 0.001) x += this.mouse.x * 2.0;
+                if (Math.abs(this.mouse.x) > 0.001) {
+                    let mx = this.mouse.x;
+                    if (SETTINGS.invertX) mx = -mx;
+                    x += mx * 2.0;
+                }
 
                 if (Math.abs(this.touch.rx) > 0.1) x += this.touch.rx * 2.0;
 
