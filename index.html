@@ -201,7 +201,7 @@
         const MAP = [
             [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
             [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1],
-            [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+            [5,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1], // Wallbuy at (1, 2) now ID 5
             [1,0,0,0,0,0,3,0,0,0,0,0,0,0,0,0,0,0,0,1],
             [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1],
             [1,2,1,0,0,0,1,1,1,1,1,1,1,1,0,0,0,0,0,1],
@@ -223,7 +223,7 @@
             { type: 'window', x: 1, y: 5, boards: 6, maxBoards: 6, lastDamage: 0 },
             { type: 'window', x: 13, y: 8, boards: 6, maxBoards: 6, lastDamage: 0 },
             { type: 'window', x: 9, y: 10, boards: 6, maxBoards: 6, lastDamage: 0 },
-            { type: 'wallbuy', x: 2, y: 1, weapon: 'Kar98k', cost: 200 }
+            { type: 'wallbuy', x: 1, y: 2, weapon: 'Kar98k', cost: 200 } // Adjusted to match wall ID 5
         ];
 
         const WEAPONS = {
@@ -384,6 +384,36 @@
                 ctx.fillRect(16, 30, 32, 20);
 
                 return c;
+            },
+            wallbuy() {
+                const s = 64;
+                const {c, ctx} = this.createCanvas(s, s);
+                // Base Wall
+                ctx.fillStyle = '#666';
+                ctx.fillRect(0,0,s,s);
+                this.noise(ctx, s, s, 0.2);
+                ctx.fillStyle = '#333';
+                ctx.fillRect(0, 0, s, 2); ctx.fillRect(0, 32, s, 2);
+                ctx.fillRect(32, 2, 2, 30); ctx.fillRect(0, 34, 2, 30);
+
+                // Chalk Outline
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 2;
+                ctx.lineJoin = 'round';
+                ctx.beginPath();
+                // Rough gun shape
+                ctx.moveTo(10, 20); ctx.lineTo(50, 20); // Barrel
+                ctx.lineTo(50, 35); ctx.lineTo(40, 35); // Grip Top
+                ctx.lineTo(35, 45); ctx.lineTo(25, 45); // Grip Bottom
+                ctx.lineTo(30, 35); ctx.lineTo(10, 35); // Trigger Guard / Body
+                ctx.closePath();
+                ctx.stroke();
+
+                ctx.font = '10px monospace';
+                ctx.fillStyle = '#fff';
+                ctx.fillText('BUY', 20, 55);
+
+                return c;
             }
         };
 
@@ -391,7 +421,8 @@
             wall: TextureGen.bricks('#666', '#333'),
             door: TextureGen.metal(),
             window: TextureGen.wood(),
-            zombie: TextureGen.zombie()
+            zombie: TextureGen.zombie(),
+            wallbuy: TextureGen.wallbuy()
         };
 
         // --- GAME ---
@@ -402,17 +433,21 @@
                 this.resize();
 
                 this.player = {
-                    x: 3.5, y: 2.5, dir: 0, pitch: 0,
+                    x: 3.5, y: 2.5, z: 0, dir: 0, pitch: 0, // z for jump
                     health: 100, maxHealth: 100,
                     lastDamage: 0,
                     score: 500,
                     inventory: [ { ...WEAPONS['M1911'], currentMag: 8, reserve: 32 } ],
                     currentWeapon: 0,
-                    lastFire: 0, reloading: false
+                    lastFire: 0, reloading: false,
+                    vz: 0, // Vertical Velocity
+                    isCrouched: false, isSprinting: false,
+                    grenades: 2, maxGrenades: 4
                 };
 
                 this.zombies = [];
                 this.bullets = [];
+                this.grenadeObjs = [];
                 this.round = 1;
                 this.spawnTimer = 0;
                 this.zombiesToSpawn = 5;
@@ -537,7 +572,11 @@
                 if (this.player.pitch > maxPitch) this.player.pitch = maxPitch;
                 if (this.player.pitch < -maxPitch) this.player.pitch = -maxPitch;
 
-                const speed = (this.player.isAiming ? C.MOVE_SPEED_ADS : C.MOVE_SPEED) * dt;
+                let baseSpeed = C.MOVE_SPEED;
+                if (this.player.isAiming) baseSpeed = C.MOVE_SPEED_ADS;
+                if (this.player.isSprinting) baseSpeed *= 1.5;
+                if (this.player.isCrouched) baseSpeed *= 0.5;
+                const speed = baseSpeed * dt;
                 const cos = Math.cos(this.player.dir);
                 const sin = Math.sin(this.player.dir);
 
@@ -545,8 +584,16 @@
                 let dx = (cos * move.y - sin * move.x) * speed;
                 let dy = (sin * move.y + cos * move.x) * speed;
 
-                if (MAP[Math.floor(this.player.y)][Math.floor(this.player.x + dx * 2)] === 0) this.player.x += dx;
-                if (MAP[Math.floor(this.player.y + dy * 2)][Math.floor(this.player.x)] === 0) this.player.y += dy;
+                const checkWalkable = (x, y) => {
+                    if (y < 0 || y >= MAP.length || x < 0 || x >= MAP[0].length) return false;
+                    const id = MAP[Math.floor(y)][Math.floor(x)];
+                    return id === 0 || id === 4; // 0=Empty, 4=Open Door
+                };
+
+                // Collision margin
+                const margin = 0.3;
+                if (checkWalkable(this.player.x + dx + (dx>0?margin:-margin), this.player.y)) this.player.x += dx;
+                if (checkWalkable(this.player.x, this.player.y + dy + (dy>0?margin:-margin))) this.player.y += dy;
 
                 // Input Actions
                 if (this.input.isAction('reload')) this.reload();
@@ -590,13 +637,120 @@
                 });
                 this.zombies = this.zombies.filter(z => z.health > 0);
 
+                // Physics (Jump/Grenades)
+                this.updatePhysics(dt);
+
                 // Check Interactable Prompt
                 this.checkInteraction();
             }
 
+            updatePhysics(dt) {
+                // Jump/Gravity
+                if (this.player.z > 0 || this.player.vz !== 0) {
+                    this.player.vz -= 20 * dt; // Gravity
+                    this.player.z += this.player.vz * dt;
+                    if (this.player.z <= 0) {
+                        this.player.z = 0;
+                        this.player.vz = 0;
+                    }
+                }
+
+                // Grenades (Simple)
+                this.grenadeObjs.forEach(g => {
+                    g.vz -= 10 * dt;
+                    g.x += g.vx * dt;
+                    g.y += g.vy * dt;
+                    g.z += g.vz * dt;
+
+                    if (g.z < 0) { // Bounce
+                        g.z = 0;
+                        g.vz = -g.vz * 0.5;
+                        g.vx *= 0.7;
+                        g.vy *= 0.7;
+                    }
+
+                    g.timer -= dt;
+                    if (g.timer <= 0 && !g.exploded) {
+                        this.explodeGrenade(g);
+                    }
+                });
+                this.grenadeObjs = this.grenadeObjs.filter(g => !g.exploded);
+            }
+
+            explodeGrenade(g) {
+                g.exploded = true;
+                playSound('shoot'); // Placeholder boom
+                this.input.haptic(200, 1.0, 1.0);
+                // Area Damage
+                this.zombies.forEach(z => {
+                    const dist = Math.sqrt((z.x - g.x)**2 + (z.y - g.y)**2);
+                    if (dist < 5.0) {
+                         z.health -= 200 / (dist + 0.5);
+                    }
+                });
+            }
+
+            jump() {
+                if (this.player.z === 0) {
+                    this.player.vz = 6;
+                }
+            }
+
+            toggleCrouch() {
+                this.player.isCrouched = !this.player.isCrouched;
+            }
+
+            toggleSprint() {
+                this.player.isSprinting = !this.player.isSprinting;
+            }
+
+            switchWeapon() {
+                if (this.player.inventory.length > 1) {
+                    this.player.currentWeapon = (this.player.currentWeapon + 1) % this.player.inventory.length;
+                    this.updateHUD();
+                }
+            }
+
+            throwGrenade() {
+                if (this.player.grenades > 0) {
+                    this.player.grenades--;
+                    const speed = 10;
+                    this.grenadeObjs.push({
+                        x: this.player.x, y: this.player.y, z: 0.5,
+                        vx: Math.cos(this.player.dir) * speed,
+                        vy: Math.sin(this.player.dir) * speed,
+                        vz: 3,
+                        timer: 3.0, exploded: false
+                    });
+                    this.updateHUD();
+                }
+            }
+
+            melee() {
+                // Short range hit
+                this.input.haptic(100, 0.5, 0.5);
+                let hit = false;
+                this.zombies.forEach(z => {
+                    const dist = Math.sqrt((this.player.x - z.x)**2 + (this.player.y - z.y)**2);
+                    if (dist < 1.5) {
+                        // Check angle
+                        const angleToZ = Math.atan2(z.y - this.player.y, z.x - this.player.x);
+                        let angleDiff = Math.abs(angleToZ - this.player.dir);
+                        if (angleDiff < 1.0) {
+                            z.health -= 150;
+                            hit = true;
+                        }
+                    }
+                });
+                if(hit) playSound('hit');
+            }
+
             spawnZombie() {
-                const w = OBJECTS.filter(o => o.type === 'window')[0]; // Just use first window for prototype
-                if(w) this.zombies.push({ x: w.x, y: w.y, health: 100 * Math.pow(1.1, this.round-1), lastAttack: 0 });
+                const windows = OBJECTS.filter(o => o.type === 'window');
+                if (windows.length > 0) {
+                    const w = windows[Math.floor(Math.random() * windows.length)];
+                    this.zombies.push({ x: w.x, y: w.y, health: 100 * Math.pow(1.1, this.round-1), lastAttack: 0 });
+                }
             }
 
             fire(time) {
@@ -837,8 +991,9 @@
                     zBuffer[x] = perpWallDist;
 
                     const lineHeight = Math.floor(h / perpWallDist);
-                    // Apply pitch offset to drawStart
-                    const drawStart = -lineHeight / 2 + h / 2 + pitchOffset;
+                    // Apply pitch offset to drawStart + Jump/Crouch Z + bob
+                    const camH = h/2 + (this.player.isCrouched ? -50 : 0) + (this.player.z * 50);
+                    const drawStart = -lineHeight / 2 + camH + pitchOffset;
 
                     // Texture Mapping
                     let texX;
@@ -1133,15 +1288,48 @@
                     this.buttons.fire = this.pad.buttons[7].pressed; // R2
                     this.buttons.ads = this.pad.buttons[6].pressed;  // L2
 
-                    // Tap detection for Reload/Interact (simple state check, debounce handled in logic)
-                    if (this.pad.buttons[2].pressed) { // Square
-                         if (!this.padReloadDown) { this.keys[SETTINGS.keys.reload] = true; this.padReloadDown = true; }
-                    } else { this.keys[SETTINGS.keys.reload] = false; this.padReloadDown = false; }
+                    // Square (Button 2): Interact Priority > Reload
+                    if (this.pad.buttons[2].pressed) {
+                         if (!this.padSquareDown) {
+                             // Logic: If prompt visible, Interact. Else Reload.
+                             const prompt = document.getElementById('prompt').style.display;
+                             if (prompt === 'block') this.game.interact();
+                             else this.game.reload();
+                             this.padSquareDown = true;
+                         }
+                    } else { this.padSquareDown = false; }
 
-                    if (this.pad.buttons[0].pressed) { // Cross
-                         if (!this.padActionDown) { this.keys[SETTINGS.keys.interact] = true; this.padActionDown = true; }
-                    } else { this.keys[SETTINGS.keys.interact] = false; this.padActionDown = false; }
+                    // Triangle (Button 3): Switch Weapon
+                    if (this.pad.buttons[3].pressed) {
+                         if (!this.padTriDown) { this.game.switchWeapon(); this.padTriDown = true; }
+                    } else { this.padTriDown = false; }
 
+                    // Cross (Button 0): Jump
+                    if (this.pad.buttons[0].pressed) {
+                         if (!this.padCrossDown) { this.game.jump(); this.padCrossDown = true; }
+                    } else { this.padCrossDown = false; }
+
+                    // Circle (Button 1): Melee
+                    if (this.pad.buttons[1].pressed) {
+                         if (!this.padCircleDown) { this.game.melee(); this.padCircleDown = true; }
+                    } else { this.padCircleDown = false; }
+
+                    // L3 (Button 10): Sprint Toggle
+                    if (this.pad.buttons[10].pressed) {
+                         if (!this.padL3Down) { this.game.toggleSprint(); this.padL3Down = true; }
+                    } else { this.padL3Down = false; }
+
+                    // R3 (Button 11): Crouch Toggle
+                    if (this.pad.buttons[11].pressed) {
+                         if (!this.padR3Down) { this.game.toggleCrouch(); this.padR3Down = true; }
+                    } else { this.padR3Down = false; }
+
+                    // R1 (Button 5): Grenade
+                    if (this.pad.buttons[5].pressed) {
+                         if (!this.padR1Down) { this.game.throwGrenade(); this.padR1Down = true; }
+                    } else { this.padR1Down = false; }
+
+                    // Start (Button 9): Pause
                     if (this.pad.buttons[9].pressed) { // Start
                          if (!this.padStartDown) { this.game.togglePause(!this.game.paused); this.padStartDown = true; }
                     } else { this.padStartDown = false; }
